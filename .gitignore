@@ -1,0 +1,4 @@
+.env
+datasets/*
+unsloth_compiled_cache/*
+wandb/*
