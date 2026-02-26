@@ -32,3 +32,13 @@ WANDB_API_KEY=your_wandb_token
 ## Model output persistence
 
 The job writes the final model + tokenizer to `outputs.model_output` in Azure ML. This output is persisted by Azure ML and remains available after compute nodes are deallocated.
+
+To force outputs into your blob container path, set `azureml.output_uri` in your config.
+
+Example:
+
+```json
+"azureml": {
+	"output_uri": "azureml://datastores/workspaceblobstore/paths/finetuning-output/"
+}
+```

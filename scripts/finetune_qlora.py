@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 import pandas as pd
+import torch
 import wandb
 from datasets import Dataset
 from trl import SFTConfig, SFTTrainer
@@ -65,6 +66,17 @@ def resolve_run_name(config: dict, run: wandb.sdk.wandb_run.Run | None) -> str:
 def build_sft_config(config: dict, output_dir: str) -> SFTConfig:
     sft_cfg = config["training"]["sft_config"].copy()
     sft_cfg["output_dir"] = output_dir
+
+    if "bf16" not in sft_cfg and "fp16" not in sft_cfg:
+        if torch.cuda.is_available():
+            major, _ = torch.cuda.get_device_capability(0)
+            supports_bf16 = major >= 8
+            sft_cfg["bf16"] = supports_bf16
+            sft_cfg["fp16"] = not supports_bf16
+        else:
+            sft_cfg["bf16"] = False
+            sft_cfg["fp16"] = False
+
     return SFTConfig(**sft_cfg)
 
 
@@ -127,7 +139,7 @@ def main() -> None:
     )
 
     training_cfg = config["training"]
-    configured_output_dir = Path(training_cfg["output_dir"])
+    configured_output_dir = Path(training_cfg.get("output_dir", "outputs/run"))
 
     if args.model_output_dir:
         output_root_dir = Path(args.model_output_dir)
@@ -137,14 +149,15 @@ def main() -> None:
     run_dir = output_root_dir / run_dir_name
     trainer_output_dir = run_dir / "trainer"
     sft_config = build_sft_config(config, str(trainer_output_dir))
+    print(f"Precision settings -> bf16: {sft_config.bf16}, fp16: {sft_config.fp16}")
 
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class = tokenizer,
         train_dataset=formatted_dataset,
-        dataset_text_field="text",
-        max_seq_length=model_cfg["max_seq_length"],
-        packing=sft_config.packing,
+        #dataset_text_field="text",
+        #max_seq_length=model_cfg["max_seq_length"],
+        #packing=sft_config.packing,
         args=sft_config,
     )
 

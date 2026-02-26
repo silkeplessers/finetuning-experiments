@@ -47,11 +47,16 @@ def main() -> None:
     azure_cfg = cfg["azureml"]
     data_cfg = cfg["data"]
     wandb_cfg = cfg.get("wandb", {})
+    output_uri = azure_cfg.get(
+        "output_uri",
+        "azureml://datastores/workspaceblobstore/paths/finetuning-output/",
+    )
 
     train_data_path = Path(data_cfg["train_data_path"])
     if not train_data_path.is_absolute():
         train_data_path = (repo_root / train_data_path).resolve()
 
+    code_dir = (repo_root / "scripts").resolve()
     conda_file = (repo_root / "azureml" / "conda.yml").resolve()
 
     environment = Environment(
@@ -74,9 +79,9 @@ def main() -> None:
         environment_variables["WANDB_API_KEY"] = wandb_api_key_value
 
     job = command(
-        code=str(repo_root),
+        code=str(code_dir),
         command=(
-            "python scripts/finetune_qlora.py "
+            "python finetune_qlora.py "
             "--config ${{inputs.qlora_config}} "
             "--train-data ${{inputs.train_data}} "
             "--model-output-dir ${{outputs.model_output}}"
@@ -86,7 +91,7 @@ def main() -> None:
             "train_data": Input(type="uri_file", path=str(train_data_path)),
         },
         outputs={
-            "model_output": Output(type="uri_folder", mode="rw_mount"),
+            "model_output": Output(type="uri_folder", mode="rw_mount", path=output_uri),
         },
         environment=environment,
         compute=azure_cfg["compute"],
@@ -103,6 +108,7 @@ def main() -> None:
 
     print(f"Submitted Azure ML job: {submitted_job.name}")
     print(f"Studio URL: {submitted_job.studio_url}")
+    print(f"Model output path: {output_uri}")
 
     if azure_cfg.get("stream_logs", True):
         ml_client.jobs.stream(submitted_job.name)

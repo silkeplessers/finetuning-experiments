@@ -3,3 +3,7 @@ datasets/*
 unsloth_compiled_cache/*
 wandb/*
 outputs/*
+.amlignore*
+finetuning/__pycache__/*
+.ipynb_aml_checkpoints/*
+*.amltmp
