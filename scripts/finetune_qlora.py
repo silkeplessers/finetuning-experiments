@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+from functools import partial
 from pathlib import Path
 
 import pandas as pd
@@ -11,22 +12,12 @@ from datasets import Dataset
 from trl import SFTConfig, SFTTrainer
 from unsloth import FastLanguageModel
 
+from formatting import format_prompt_batch
+
 
 def load_config(config_path: str) -> dict:
     with open(config_path, "r", encoding="utf-8") as file_handle:
         return json.load(file_handle)
-
-
-def format_prompt_batch(batch: dict, chat_template: str, input_column: str, output_column: str, eos_token: str) -> dict:
-    inputs = batch[input_column]
-    outputs = batch[output_column]
-    texts = []
-
-    for user_input, assistant_output in zip(inputs, outputs):
-        text = chat_template.format(INPUT=user_input, OUTPUT=assistant_output) + eos_token
-        texts.append(text)
-
-    return {"text": texts}
 
 
 def load_train_dataset(config: dict, train_data_override: str | None = None) -> Dataset:
@@ -98,14 +89,30 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-
+    # format dataset for training
+    dataset = load_train_dataset(config, args.train_data)
+    data_cfg = config["data"]
+    eos_token = tokenizer.eos_token
+    formatted_dataset = dataset.map(
+        partial(
+            format_prompt_batch,
+            chat_template=data_cfg["chat_template"],
+            input_column=data_cfg["input_column"],
+            output_column=data_cfg["output_column"],
+            eos_token=eos_token,
+        ),
+        batched=True,
+        remove_columns=dataset.column_names,
+    )
+    
+    # initialize model and tokenizer
     model_cfg = config["model"]
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_cfg["name"],
         max_seq_length=model_cfg["max_seq_length"],
         load_in_4bit=model_cfg["load_in_4bit"],
     )
-
+    # apply peft/qlora to model
     lora_cfg = config["lora"]
     model = FastLanguageModel.get_peft_model(
         model,
@@ -119,25 +126,12 @@ def main() -> None:
         use_rslora=lora_cfg["use_rslora"],
         loftq_config=lora_cfg["loftq_config"],
     )
-
+    # intialize wandb experiment tracking
     run = init_wandb(config, model.peft_config)
+    
+    # determine output directories for trainer and final model
     run_dir_name = resolve_run_name(config, run)
-
-    dataset = load_train_dataset(config, args.train_data)
-    data_cfg = config["data"]
-    eos_token = tokenizer.eos_token
-    formatted_dataset = dataset.map(
-        lambda batch: format_prompt_batch(
-            batch,
-            chat_template=data_cfg["chat_template"],
-            input_column=data_cfg["input_column"],
-            output_column=data_cfg["output_column"],
-            eos_token=eos_token,
-        ),
-        batched=True,
-        remove_columns=dataset.column_names,
-    )
-
+    
     training_cfg = config["training"]
     configured_output_dir = Path(training_cfg.get("output_dir", "outputs/run"))
 
@@ -151,6 +145,7 @@ def main() -> None:
     sft_config = build_sft_config(config, str(trainer_output_dir))
     print(f"Precision settings -> bf16: {sft_config.bf16}, fp16: {sft_config.fp16}")
 
+    # initialize trainer and start training
     trainer = SFTTrainer(
         model=model,
         processing_class = tokenizer,
@@ -164,7 +159,7 @@ def main() -> None:
     trainer.train()
 
     final_model_dir = run_dir / training_cfg["final_model_subdir"]
-
+    # save final model and tokenizer to output directory
     final_model_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(str(final_model_dir))
     tokenizer.save_pretrained(str(final_model_dir))
