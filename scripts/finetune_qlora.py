@@ -2,17 +2,14 @@ import argparse
 import json
 import os
 import re
-from functools import partial
 from pathlib import Path
-
-import pandas as pd
 import torch
 import wandb
 from datasets import Dataset
 from trl import SFTConfig, SFTTrainer
 from unsloth import FastLanguageModel
+from datasets import load_from_disk
 
-from formatting import format_prompt_batch
 
 
 def load_config(config_path: str) -> dict:
@@ -20,12 +17,9 @@ def load_config(config_path: str) -> dict:
         return json.load(file_handle)
 
 
-def load_train_dataset(config: dict, train_data_override: str | None = None) -> Dataset:
-    data_cfg = config["data"]
-    train_data_path = train_data_override or data_cfg["train_data_path"]
-
-    train_dataframe = pd.read_json(train_data_path, orient="records", lines=True)
-    return Dataset.from_pandas(train_dataframe)
+def load_train_dataset(path:str) -> Dataset:
+    hf_train_data = load_from_disk(path)
+    return hf_train_data
 
 
 def init_wandb(config: dict, peft_config) -> wandb.sdk.wandb_run.Run | None:
@@ -78,7 +72,7 @@ def main() -> None:
         "--train-data",
         required=False,
         default=None,
-        help="Optional path override for training .jsonl",
+        help="Optional path override for pre-formatted HuggingFace dataset folder",
     )
     parser.add_argument(
         "--model-output-dir",
@@ -89,21 +83,6 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    # format dataset for training
-    dataset = load_train_dataset(config, args.train_data)
-    data_cfg = config["data"]
-    eos_token = tokenizer.eos_token
-    formatted_dataset = dataset.map(
-        partial(
-            format_prompt_batch,
-            chat_template=data_cfg["chat_template"],
-            input_column=data_cfg["input_column"],
-            output_column=data_cfg["output_column"],
-            eos_token=eos_token,
-        ),
-        batched=True,
-        remove_columns=dataset.column_names,
-    )
     
     # initialize model and tokenizer
     model_cfg = config["model"]
@@ -112,6 +91,7 @@ def main() -> None:
         max_seq_length=model_cfg["max_seq_length"],
         load_in_4bit=model_cfg["load_in_4bit"],
     )
+    
     # apply peft/qlora to model
     lora_cfg = config["lora"]
     model = FastLanguageModel.get_peft_model(
@@ -126,6 +106,11 @@ def main() -> None:
         use_rslora=lora_cfg["use_rslora"],
         loftq_config=lora_cfg["loftq_config"],
     )
+    
+    # load pre-formatted dataset
+    train_data_path = args.train_data or config["data"]["train_data_path"]
+    formatted_dataset = load_train_dataset(train_data_path)
+    
     # intialize wandb experiment tracking
     run = init_wandb(config, model.peft_config)
     

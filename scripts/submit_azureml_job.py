@@ -88,7 +88,7 @@ def main() -> None:
         ),
         inputs={
             "qlora_config": Input(type="uri_file", path=str(config_path)),
-            "train_data": Input(type="uri_file", path=str(train_data_path)),
+            "train_data": Input(type="uri_folder", path=str(train_data_path)),
         },
         outputs={
             "model_output": Output(type="uri_folder", mode="rw_mount", path=output_uri),

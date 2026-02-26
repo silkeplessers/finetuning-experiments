@@ -5,10 +5,7 @@
     "load_in_4bit": true
   },
   "data": {
-    "train_data_path": "datasets/alpaca_train.jsonl",
-    "input_column": "input",
-    "output_column": "output",
-    "chat_template": "Beantwoord de volgende vraag zo goed mogelijk.\n\n### Vraag:\n{INPUT}\n\n### Antwoord:\n{OUTPUT}"
+    "train_data_path": "datasets/alpaca_train_formatted"
   },
   "lora": {
     "r": 16,
