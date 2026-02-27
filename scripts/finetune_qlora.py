@@ -1,3 +1,4 @@
+import unsloth
 import argparse
 import json
 import os
@@ -5,10 +6,9 @@ import re
 from pathlib import Path
 import torch
 import wandb
-from datasets import Dataset
+from datasets import Dataset, load_from_disk
 from trl import SFTConfig, SFTTrainer
 from unsloth import FastLanguageModel
-from datasets import load_from_disk
 
 
 
@@ -18,7 +18,7 @@ def load_config(config_path: str) -> dict:
 
 
 def load_train_dataset(path:str) -> Dataset:
-    hf_train_data = load_from_disk(path)
+    hf_train_data = load_from_disk(path, keep_in_memory=True)
     return hf_train_data
 
 
@@ -27,11 +27,19 @@ def init_wandb(config: dict, peft_config) -> wandb.sdk.wandb_run.Run | None:
     if not wandb_cfg.get("enabled", True):
         return None
 
+    # Option 1: just log your JSON config (safe, all JSON-serializable)
+    wandb_run_config = {
+        "model": config.get("model", {}),
+        "lora": config.get("lora", {}),
+        "training": config.get("training", {}).get("sft_config", {}),
+    }
+
     return wandb.init(
         project=wandb_cfg["project"],
         name=wandb_cfg["run_name"],
-        config=peft_config,
+        config=wandb_run_config,
     )
+
 
 
 def sanitize_path_component(value: str) -> str:
