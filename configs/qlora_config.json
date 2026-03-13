@@ -28,7 +28,7 @@
   },
   "training": {
     "output_dir": "outputs/run_test",
-    "final_model_subdir": "mistral_lora_run_test",
+    "final_model_subdir": "mistral_lora_run1",
     "sft_config": {
       "dataset_text_field": "text",
       "per_device_train_batch_size": 2,
@@ -51,7 +51,7 @@
   "wandb": {
     "enabled": true,
     "project": "dutch-mistral",
-    "run_name": "run_r16_a16_e1_b16-TEST"
+    "run_name": "run1"
   },
   "azureml": {
     "experiment_name": "dutch-mistral-qlora",

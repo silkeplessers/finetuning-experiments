@@ -1,0 +1,1 @@
+python scripts/format_dataset.py --data datasets/alpaca_test.jsonl --config configs/qlora_config.json --output datasets/alpaca_test_formatted
