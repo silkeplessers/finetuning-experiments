@@ -52,6 +52,8 @@ def parse_args() -> argparse.Namespace:
         help="Which model(s) to run inference with (default: both)",
     )
     parser.add_argument("--max-new-tokens", type=int, default=1000, help="Max tokens to generate per example")
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size for inference (default: 8)")
+    parser.add_argument("--max-samples", type=int, default=None, help="Limit test set to N random samples (default: use all)")
     parser.add_argument("--storage-account", type=str, default=STORAGE_ACCOUNT, help="Azure storage account name")
     parser.add_argument("--results-container", type=str, default=RESULTS_CONTAINER, help="Blob container for inference results")
     parser.add_argument("--adapter-container", type=str, default=ADAPTER_CONTAINER, help="Blob container with LoRA adapters")
@@ -89,6 +91,7 @@ def run_baseline(
     config: dict,
     test_df: pd.DataFrame,
     max_new_tokens: int,
+    batch_size: int,
     storage_account: str,
     results_container: str,
 ) -> None:
@@ -102,7 +105,7 @@ def run_baseline(
         load_in_4bit=model_cfg["load_in_4bit"],
     )
 
-    predictions = run_inference(model, tokenizer, test_df["input"].tolist(), max_new_tokens)
+    predictions = run_inference(model, tokenizer, test_df["input"].tolist(), max_new_tokens, batch_size)
 
     results = test_df[["input", "output"]].copy()
     results.rename(columns={"output": "expected_output"}, inplace=True)
@@ -121,6 +124,7 @@ def run_finetuned(
     config: dict,
     test_df: pd.DataFrame,
     max_new_tokens: int,
+    batch_size: int,
     storage_account: str,
     adapter_container: str,
     results_container: str,
@@ -145,7 +149,7 @@ def run_finetuned(
             load_in_4bit=model_cfg["load_in_4bit"],
         )
 
-        predictions = run_inference(model, tokenizer, test_df["input"].tolist(), max_new_tokens)
+        predictions = run_inference(model, tokenizer, test_df["input"].tolist(), max_new_tokens, batch_size)
 
     results = test_df[["input", "output"]].copy()
     results.rename(columns={"output": "expected_output"}, inplace=True)
@@ -163,16 +167,18 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
     test_df = prepare_test_data(args.test_data)
+    if args.max_samples and args.max_samples < len(test_df):
+        test_df = test_df.head(args.max_samples).reset_index(drop=True)
     logger.info("Loaded %d test examples", len(test_df))
 
     if args.mode in ("baseline", "both"):
         logger.info("--- Running baseline inference ---")
-        run_baseline(config, test_df, args.max_new_tokens, args.storage_account, args.results_container)
+        run_baseline(config, test_df, args.max_new_tokens, args.batch_size, args.storage_account, args.results_container)
 
     if args.mode in ("finetuned", "both"):
         logger.info("--- Running finetuned inference ---")
         run_finetuned(
-            config, test_df, args.max_new_tokens,
+            config, test_df, args.max_new_tokens, args.batch_size,
             args.storage_account, args.adapter_container, args.results_container,
         )
 

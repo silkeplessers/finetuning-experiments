@@ -14,14 +14,23 @@ def run_inference(
     tokenizer,
     inputs: list[str],
     max_new_tokens: int = 256,
+    batch_size: int = 8,
 ) -> list[str]:
-    """Run inference on a list of input texts and return generated answers."""
+    """Run batched inference on a list of input texts and return generated answers."""
     FastLanguageModel.for_inference(model)
 
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    prompts = [build_inference_prompt(text) for text in inputs]
     predictions = []
-    for input_text in tqdm(inputs, desc="Running inference"):
-        prompt = build_inference_prompt(input_text)
-        tokens = tokenizer(prompt, return_tensors="pt").to("cuda")
+
+    for i in tqdm(range(0, len(prompts), batch_size), desc="Running inference"):
+        batch_prompts = prompts[i : i + batch_size]
+        tokens = tokenizer(
+            batch_prompts, return_tensors="pt", padding=True, truncation=True,
+        ).to("cuda")
 
         with torch.no_grad():
             outputs = model.generate(
@@ -33,8 +42,9 @@ def run_inference(
             )
 
         input_len = tokens["input_ids"].shape[-1]
-        generated = outputs[0][input_len:]
-        answer = tokenizer.decode(generated, skip_special_tokens=True).strip()
-        predictions.append(answer)
+        for output in outputs:
+            generated = output[input_len:]
+            answer = tokenizer.decode(generated, skip_special_tokens=True).strip()
+            predictions.append(answer)
 
     return predictions

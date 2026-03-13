@@ -26,7 +26,7 @@ import os
 import re
 import sys
 import tempfile
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -43,37 +43,31 @@ logger = logging.getLogger(__name__)
 STORAGE_ACCOUNT = "llmaml5615532443"
 RESULTS_CONTAINER = "inference-results"
 
-# ── Judge system prompts ──────────────────────────────────────────────────────
+# ── Judge system prompt (combined) ────────────────────────────────────────────
 
-DUTCH_QUALITY_SYSTEM = """\
-You are an expert evaluator of Dutch language quality.
-You will receive a prompt (in Dutch) and an AI-generated response.
-Evaluate ONLY the Dutch language quality of the response.
+JUDGE_SYSTEM = """\
+You are an expert evaluator. You will receive an original prompt (in Dutch), \
+an expected reference answer, and the model's actual response.
 
-Scoring rubric (1-5):
-  1 - Very poor: major grammar errors, largely incomprehensible or not Dutch.
-  2 - Poor: frequent grammar mistakes, unnatural phrasing.
-  3 - Acceptable: understandable but contains noticeable errors.
-  4 - Good: mostly fluent with only minor mistakes.
-  5 - Excellent: fluent, grammatically correct, natural vocabulary.
+Evaluate the response on TWO criteria:
 
-Reply with ONLY a JSON object (no markdown fences):
-{"score": <int 1-5>, "justification": "<one-sentence explanation>"}"""
+1. **Dutch language quality** (grammar, fluency, vocabulary):
+   1 - Very poor: major grammar errors, largely incomprehensible or not Dutch.
+   2 - Poor: frequent grammar mistakes, unnatural phrasing.
+   3 - Acceptable: understandable but contains noticeable errors.
+   4 - Good: mostly fluent with only minor mistakes.
+   5 - Excellent: fluent, grammatically correct, natural vocabulary.
 
-INSTRUCTION_FOLLOWING_SYSTEM = """\
-You are an expert evaluator assessing how well an AI model follows instructions.
-You will receive the original prompt, the expected (reference) answer, and the model's actual response.
-Evaluate how faithfully and completely the response follows the instruction compared to the reference.
-
-Scoring rubric (1-5):
-  1 - Completely irrelevant or fails to address the instruction.
-  2 - Partially addresses the instruction but misses key elements.
-  3 - Addresses the instruction with notable omissions or inaccuracies.
-  4 - Follows instructions well with only minor deviations.
-  5 - Perfectly follows instructions; comprehensive and accurate.
+2. **Instruction following** (faithfulness to the expected output):
+   1 - Completely irrelevant or fails to address the instruction.
+   2 - Partially addresses the instruction but misses key elements.
+   3 - Addresses the instruction with notable omissions or inaccuracies.
+   4 - Follows instructions well with only minor deviations.
+   5 - Perfectly follows instructions; comprehensive and accurate.
 
 Reply with ONLY a JSON object (no markdown fences):
-{"score": <int 1-5>, "justification": "<one-sentence explanation>"}"""
+{"dutch_quality_score": <int 1-5>, "dutch_quality_justification": "<one sentence>", \
+"instruction_following_score": <int 1-5>, "instruction_following_justification": "<one sentence>"}"""
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -94,14 +88,12 @@ def build_judge_client(azure_endpoint: str):
 
 
 def _parse_judge_response(text: str) -> dict:
-    """Best-effort extraction of {"score": int, "justification": str} from LLM output."""
-    # Try direct JSON parse first
+    """Best-effort extraction of the combined judge JSON from LLM output."""
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Fall back to regex extraction
     match = re.search(r'\{[^}]+\}', text, re.DOTALL)
     if match:
         try:
@@ -109,36 +101,30 @@ def _parse_judge_response(text: str) -> dict:
         except json.JSONDecodeError:
             pass
 
-    return {"score": None, "justification": text.strip()}
+    return {
+        "dutch_quality_score": None,
+        "dutch_quality_justification": text.strip(),
+        "instruction_following_score": None,
+        "instruction_following_justification": text.strip(),
+    }
 
 
-def judge_single(client, model: str, system_prompt: str, user_message: str) -> dict:
-    """Call the judge LLM and parse the structured response."""
-    response = client.chat.completions.create(
-        model=model,
-        temperature=0,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-    )
-    return _parse_judge_response(response.choices[0].message.content)
-
-
-def evaluate_dutch_quality(client, model: str, prompt: str, response_text: str) -> dict:
-    user_msg = f"Prompt:\n{prompt}\n\nResponse:\n{response_text}"
-    return judge_single(client, model, DUTCH_QUALITY_SYSTEM, user_msg)
-
-
-def evaluate_instruction_following(
-    client, model: str, prompt: str, expected: str, response_text: str,
-) -> dict:
+def evaluate_row(client, model: str, prompt: str, expected: str, response_text: str) -> dict:
+    """Single combined judge call that scores both criteria at once."""
     user_msg = (
         f"Prompt:\n{prompt}\n\n"
         f"Expected response:\n{expected}\n\n"
         f"Model response:\n{response_text}"
     )
-    return judge_single(client, model, INSTRUCTION_FOLLOWING_SYSTEM, user_msg)
+    response = client.chat.completions.create(
+        model=model,
+        temperature=0,
+        messages=[
+            {"role": "system", "content": JUDGE_SYSTEM},
+            {"role": "user", "content": user_msg},
+        ],
+    )
+    return _parse_judge_response(response.choices[0].message.content)
 
 
 # ── Main logic ────────────────────────────────────────────────────────────────
@@ -170,37 +156,36 @@ def run_evaluation(
     df: pd.DataFrame,
     client,
     judge_model: str,
-    request_delay: float = 0.5,
+    max_workers: int = 4,
 ) -> pd.DataFrame:
-    """Run both evaluation criteria on every row and return an enriched DataFrame."""
-    dutch_scores, dutch_justifications = [], []
-    instr_scores, instr_justifications = [], []
+    """Run evaluation concurrently — one combined judge call per row."""
+    results = [None] * len(df)
 
-    total = len(df)
-    for idx, row in df.iterrows():
-        logger.info("Evaluating %d/%d ...", idx + 1, total)
-
-        # --- Dutch quality ---
-        dq = evaluate_dutch_quality(client, judge_model, row["input"], row["predicted_output"])
-        dutch_scores.append(dq.get("score"))
-        dutch_justifications.append(dq.get("justification", ""))
-
-        time.sleep(request_delay)
-
-        # --- Instruction following ---
-        inf = evaluate_instruction_following(
+    def _eval_row(idx: int, row):
+        result = evaluate_row(
             client, judge_model, row["input"], row["expected_output"], row["predicted_output"],
         )
-        instr_scores.append(inf.get("score"))
-        instr_justifications.append(inf.get("justification", ""))
+        return idx, result
 
-        time.sleep(request_delay)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_eval_row, idx, row): idx
+            for idx, row in df.iterrows()
+        }
+        done = 0
+        total = len(futures)
+        for future in as_completed(futures):
+            idx, result = future.result()
+            results[idx] = result
+            done += 1
+            if done % 10 == 0 or done == total:
+                logger.info("Evaluated %d/%d", done, total)
 
     df = df.copy()
-    df["dutch_quality_score"] = dutch_scores
-    df["dutch_quality_justification"] = dutch_justifications
-    df["instruction_following_score"] = instr_scores
-    df["instruction_following_justification"] = instr_justifications
+    df["dutch_quality_score"] = [r.get("dutch_quality_score") for r in results]
+    df["dutch_quality_justification"] = [r.get("dutch_quality_justification", "") for r in results]
+    df["instruction_following_score"] = [r.get("instruction_following_score") for r in results]
+    df["instruction_following_justification"] = [r.get("instruction_following_justification", "") for r in results]
     return df
 
 
@@ -227,7 +212,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--local-results", type=str, default=None, help="Optional local JSONL file instead of downloading from blob")
     parser.add_argument("--storage-account", type=str, default=STORAGE_ACCOUNT)
     parser.add_argument("--results-container", type=str, default=RESULTS_CONTAINER)
-    parser.add_argument("--request-delay", type=float, default=0.5, help="Seconds between judge API calls")
+    parser.add_argument("--max-workers", type=int, default=4, help="Number of concurrent judge API calls (default: 4)")
     return parser.parse_args()
 
 
@@ -246,7 +231,7 @@ def main() -> None:
     client = build_judge_client(args.azure_endpoint)
 
     # Run evaluation
-    eval_df = run_evaluation(df, client, args.judge_model, args.request_delay)
+    eval_df = run_evaluation(df, client, args.judge_model, args.max_workers)
 
     # Print summary
     print_summary(eval_df, args.model_label)
