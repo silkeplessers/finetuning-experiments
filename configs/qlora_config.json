@@ -1,0 +1,68 @@
+{
+  "model": {
+    "name": "unsloth/mistral-7b-instruct-v0.3-bnb-4bit",
+    "max_seq_length": 2048,
+    "load_in_4bit": true
+  },
+  "data": {
+    "train_data_path": "datasets/alpaca_train_formatted"
+  },
+  "lora": {
+    "r": 16,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ],
+    "lora_alpha": 16,
+    "lora_dropout": 0,
+    "bias": "none",
+    "use_gradient_checkpointing": "unsloth",
+    "random_state": 3407,
+    "use_rslora": false,
+    "loftq_config": null
+  },
+  "training": {
+    "output_dir": "outputs/run_test",
+    "final_model_subdir": "mistral_lora_run1",
+    "sft_config": {
+      "dataset_text_field": "text",
+      "per_device_train_batch_size": 2,
+      "gradient_accumulation_steps": 8,
+      "warmup_steps": 300,
+      "max_steps": 10,
+      "learning_rate": 0.0002,
+      "logging_steps": 1,
+      "optim": "adamw_8bit",
+      "weight_decay": 0.01,
+      "lr_scheduler_type": "linear",
+      "seed": 3407,
+      "fp16": true,
+      "bf16": false,
+      "packing": false,
+      "disable_tqdm": true,
+      "report_to": "wandb"
+    }
+  },
+  "wandb": {
+    "enabled": true,
+    "project": "dutch-mistral",
+    "run_name": "run1"
+  },
+  "azureml": {
+    "experiment_name": "dutch-mistral-qlora",
+    "compute": "gpu-cluster",
+    "display_name": "qlora-finetune",
+    "description": "QLoRA finetuning job",
+    "output_uri": "azureml://datastores/workspaceblobstore/paths/finetuning-output/",
+    "environment_name": "qlora-unsloth-env",
+    "environment_version": "2",
+    "instance_count": 1,
+    "timeout_minutes": 1440,
+    "stream_logs": true
+  }
+}
