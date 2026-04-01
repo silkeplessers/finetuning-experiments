@@ -105,10 +105,10 @@ def run_baseline(
         load_in_4bit=model_cfg["load_in_4bit"],
     )
 
-    predictions = run_inference(model, tokenizer, test_df["input"].tolist(), max_new_tokens, batch_size)
+    predictions = run_inference(model, tokenizer, test_df["prompt"].tolist(), max_new_tokens, batch_size)
 
-    results = test_df[["input", "output"]].copy()
-    results.rename(columns={"output": "expected_output"}, inplace=True)
+    results = test_df[["prompt", "output"]].copy()
+    results.rename(columns={"prompt": "input", "output": "expected_output"}, inplace=True)
     results["predicted_output"] = predictions
     results["model"] = "baseline"
 
@@ -149,10 +149,10 @@ def run_finetuned(
             load_in_4bit=model_cfg["load_in_4bit"],
         )
 
-        predictions = run_inference(model, tokenizer, test_df["input"].tolist(), max_new_tokens, batch_size)
+        predictions = run_inference(model, tokenizer, test_df["prompt"].tolist(), max_new_tokens, batch_size)
 
-    results = test_df[["input", "output"]].copy()
-    results.rename(columns={"output": "expected_output"}, inplace=True)
+    results = test_df[["prompt", "output"]].copy()
+    results.rename(columns={"prompt": "input", "output": "expected_output"}, inplace=True)
     results["predicted_output"] = predictions
     results["model"] = run_name
 

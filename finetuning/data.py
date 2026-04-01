@@ -13,11 +13,11 @@ def merge_instruction_into_input(
 ) -> pd.DataFrame:
     """Concatenate the instruction and input columns into a single input column."""
     df = df.copy()
-    df[input_col] = (
+    df["prompt"] = (
         df[instruction_col].fillna("").str.strip()
         + "\ninput: "
         + df[input_col].fillna("").str.strip()
-    )
+    ).str.strip()
     return df
 
 

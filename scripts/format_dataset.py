@@ -18,28 +18,17 @@ from formatting import format_prompt_batch
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-CHAT_TEMPLATE = """\
-Beantwoord de volgende vraag zo goed mogelijk.
-
-### Vraag:
-{INPUT}
-
-### Antwoord:
-{OUTPUT}
-"""
-
 
 def format_dataset(
     df: pd.DataFrame,
-    chat_template: str,
-    eos_token: str,
-    input_column: str = "input",
+    tokenizer,
+    input_column: str = "prompt",
     output_column: str = "output",
 ) -> Dataset:
     hf_dataset = Dataset.from_pandas(df)
     return hf_dataset.map(
         lambda batch: format_prompt_batch(
-            batch, chat_template, input_column, output_column, eos_token,
+            batch, tokenizer, input_column, output_column,
         ),
         batched=True,
         remove_columns=hf_dataset.column_names,
@@ -77,9 +66,8 @@ def main() -> None:
     logger.info("Loaded %d rows from %s", len(data), args.data)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
-    eos_token = tokenizer.eos_token
 
-    formatted = format_dataset(data, CHAT_TEMPLATE, eos_token)
+    formatted = format_dataset(data, tokenizer)
     formatted.save_to_disk(args.output)
 
     logger.info("Saved %d formatted examples -> %s", len(formatted), args.output)

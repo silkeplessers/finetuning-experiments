@@ -23,7 +23,7 @@ def run_inference(
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
-    prompts = [build_inference_prompt(text) for text in inputs]
+    prompts = [build_inference_prompt(tokenizer, text) for text in inputs]
     predictions = []
 
     for i in tqdm(range(0, len(prompts), batch_size), desc="Running inference"):
