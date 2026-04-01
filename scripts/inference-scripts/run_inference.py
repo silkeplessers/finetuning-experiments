@@ -26,7 +26,7 @@ import pandas as pd
 import torch
 
 # Ensure project root is on sys.path so `finetuning` package is importable.
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 sys.path.insert(0, _PROJECT_ROOT)
 
 from finetuning.blob_storage import download_blob_directory, upload_file_to_blob

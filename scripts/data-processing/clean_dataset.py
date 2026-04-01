@@ -149,7 +149,51 @@ for r in rows:
         flag(r, "code_instruction")
 
 # ---------------------------------------------------------------------------
-# 5. Build cleaned dataset
+# 5. Flag math questions
+# ---------------------------------------------------------------------------
+
+# 5a. Instruction asks for math/calculation
+MATH_INSTRUCTION = re.compile(
+    r"bereken|berekening|optellen|aftrekken|vermenigvuldig|delen door|"
+    r"vierkants\s*wortel|wortel van|kwadraat|macht van|"
+    r"wat is \d+\s*[+\-×÷xX*/]\s*\d+|los op|vergelijking|"
+    r"wiskundig|rekenkundig|breuk|noemer|teller|decimaal|"
+    r"percentage|procent van|hoeveel is \d+|\d+\s*%\s*van|"
+    r"oppervlakte|omtrek|volume|straal|diameter|"
+    r"priemgetal|deelbaar|deler|veelvoud|faculteit|"
+    r"gemiddelde|mediaan|modus|standaardafwijking|"
+    r"sinus|cosinus|tangens|logaritme|exponent",
+    re.IGNORECASE,
+)
+
+# 5b. Output is predominantly numeric (math result)
+MATH_OUTPUT = re.compile(
+    r"^\s*-?[\d.,/%°]+\s*$"  # output is just a number/percentage
+)
+
+# 5c. Content has math expressions
+MATH_EXPRESSIONS = re.compile(
+    r"\d+\s*[+\-×÷]\s*\d+\s*=|\d+\s*\*\s*\d+\s*=|\d+\s*/\s*\d+\s*=|"
+    r"\^\d+|√\d+|\d+\s*mod\s*\d+|\bx\s*[=+\-]\s*\d+|"
+    r"\d+\s*>\s*\d+.*\d+\s*<\s*\d+"
+)
+
+for r in rows:
+    instr = r["instruction"]
+    output = r["output"]
+    inp = r.get("input", "")
+    combined = instr + " " + inp + " " + output
+
+    if MATH_INSTRUCTION.search(instr):
+        flag(r, "math_instruction")
+    elif MATH_OUTPUT.match(output):
+        flag(r, "math_output")
+    elif MATH_EXPRESSIONS.search(combined) and len(output) < 50:
+        # Short outputs with math expressions are likely pure math problems
+        flag(r, "math_expression")
+
+# ---------------------------------------------------------------------------
+# 6. Build cleaned dataset
 # ---------------------------------------------------------------------------
 flagged_ids = set(reasons.keys())
 cleaned = [r for r in rows if r["id"] not in flagged_ids]
@@ -159,7 +203,7 @@ for i, r in enumerate(cleaned, start=1):
     r["id"] = i
 
 # ---------------------------------------------------------------------------
-# 6. Write output
+# 7. Write output
 # ---------------------------------------------------------------------------
 OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 with OUTPUT_PATH.open("w", encoding="utf-8") as f:
@@ -167,7 +211,7 @@ with OUTPUT_PATH.open("w", encoding="utf-8") as f:
         f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 # ---------------------------------------------------------------------------
-# 7. Summary
+# 8. Summary
 # ---------------------------------------------------------------------------
 print(f"\n{'=' * 55}")
 print(f"CLEANING SUMMARY")
@@ -189,6 +233,9 @@ category_labels = {
     "translation_to_english": "Translation-to-English task",
     "code_in_content": "Code in content",
     "code_instruction": "Code in instruction",
+    "math_instruction": "Math in instruction",
+    "math_output": "Math-only output (numeric)",
+    "math_expression": "Math expression (short output)",
 }
 
 print(f"\nRows flagged by reason (one row can match multiple):")
