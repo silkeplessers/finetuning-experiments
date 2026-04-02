@@ -17,13 +17,19 @@ import asyncio
 import json
 import logging
 import os
+import random
 import sys
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+from finetuning.blob_storage import upload_file_to_blob
 from finetuning.data import heuristic_quality_score_batch
+
+load_dotenv(PROJECT_ROOT / ".env")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -38,6 +44,8 @@ OUTPUT_PATH = Path("datasets/alpaca_high_quality.jsonl")
 SCORING_LOG_PATH = Path("datasets/subsample_scoring_log.jsonl")
 
 BATCH_SIZE = 20  # examples per LLM call
+MAX_RETRIES = 6
+BACKOFF_BASE = 2  # seconds; actual wait = base * 2^attempt + jitter
 
 JUDGE_SYSTEM_PROMPT = """\
 Je bent een expert in de Nederlandse taal. Je beoordeelt trainingsvoorbeelden \
@@ -88,7 +96,7 @@ def heuristic_prefilter(rows: list[dict], top_n: int) -> tuple[list[dict], list[
         len(rows),
     )
 
-    scores_list = heuristic_quality_score_batch(rows, batch_size=64)
+    scores_list = heuristic_quality_score_batch(rows, batch_size=16)
 
     row_scores = [(scores["total"], r, scores) for r, scores in zip(rows, scores_list)]
     row_scores.sort(key=lambda x: x[0], reverse=True)
@@ -155,37 +163,48 @@ async def score_batch(
     prompt = build_judge_prompt(batch)
 
     async with semaphore:
-        try:
-            response = await client.beta.chat.completions.parse(
-                model=JUDGE_MODEL,
-                messages=[
-                    {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                response_format=QualityScoreBatch,
-                max_completion_tokens=8192,
-            )
-            message = response.choices[0].message
-
-            if message.refusal:
-                logger.warning("Batch %d: model refused: %s", batch_id, message.refusal)
-                return [None] * len(batch)
-
-            parsed = message.parsed
-            if not parsed or len(parsed.scores) != len(batch):
-                logger.warning(
-                    "Batch %d: expected %d scores, got %d",
-                    batch_id,
-                    len(batch),
-                    len(parsed.scores) if parsed else 0,
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = await client.beta.chat.completions.parse(
+                    model=JUDGE_MODEL,
+                    messages=[
+                        {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    response_format=QualityScoreBatch,
+                    max_completion_tokens=8192,
                 )
+                message = response.choices[0].message
+
+                if message.refusal:
+                    logger.warning("Batch %d: model refused: %s", batch_id, message.refusal)
+                    return [None] * len(batch)
+
+                parsed = message.parsed
+                if not parsed or len(parsed.scores) != len(batch):
+                    logger.warning(
+                        "Batch %d: expected %d scores, got %d",
+                        batch_id,
+                        len(batch),
+                        len(parsed.scores) if parsed else 0,
+                    )
+                    return [None] * len(batch)
+
+                return [s.model_dump() for s in parsed.scores]
+
+            except Exception as e:
+                error_str = str(e)
+                is_rate_limit = "429" in error_str or "too_many_requests" in error_str.lower()
+                if is_rate_limit and attempt < MAX_RETRIES - 1:
+                    wait = BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        "Batch %d: 429 rate limited (attempt %d/%d), retrying in %.1fs",
+                        batch_id, attempt + 1, MAX_RETRIES, wait,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                logger.error("Batch %d failed: %s", batch_id, e)
                 return [None] * len(batch)
-
-            return [s.model_dump() for s in parsed.scores]
-
-        except Exception as e:
-            logger.error("Batch %d failed: %s", batch_id, e)
-            return [None] * len(batch)
 
 
 async def llm_score_all(
@@ -302,6 +321,11 @@ def parse_args():
         action="store_true",
         help="Run stage 1 only (no API calls), print stats and exit",
     )
+    parser.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="Skip uploading results to blob storage",
+    )
     return parser.parse_args()
 
 
@@ -390,6 +414,24 @@ async def run(args):
         max(output_lengths),
     )
     logger.info("Written to %s", out_path)
+
+    # Upload to blob storage
+    if not args.no_upload:
+        storage_account = os.environ["STORAGE_ACCOUNT"]
+        container_name = os.environ["CONTAINER_NAME"]
+        for local_file in [out_path, Path(args.scoring_log)]:
+            try:
+                url = upload_file_to_blob(
+                    storage_account=storage_account,
+                    container_name=container_name,
+                    blob_name=local_file.name,
+                    local_path=str(local_file),
+                )
+                logger.info("Uploaded to blob storage: %s", url)
+            except Exception as e:
+                logger.error("Failed to upload %s: %s", local_file.name, e)
+    else:
+        logger.info("Skipping blob storage upload (--no-upload)")
 
 
 def main():

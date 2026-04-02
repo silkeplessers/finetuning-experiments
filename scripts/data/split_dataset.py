@@ -7,12 +7,18 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+from finetuning.blob_storage import upload_file_to_blob
 from finetuning.data import load_jsonl, merge_instruction_into_input, split_train_test
+
+load_dotenv(PROJECT_ROOT / ".env")
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -52,6 +58,11 @@ def parse_args() -> argparse.Namespace:
         default=42,
         help="Random seed for reproducible splits (default: 42)",
     )
+    parser.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="Skip uploading results to blob storage",
+    )
     return parser.parse_args()
 
 
@@ -72,6 +83,24 @@ def main() -> None:
 
     logger.info("Train: %d rows -> %s", len(train), args.train_out)
     logger.info("Test:  %d rows -> %s", len(test), args.test_out)
+
+    # Upload to blob storage
+    if not args.no_upload:
+        storage_account = os.environ["STORAGE_ACCOUNT"]
+        container_name = os.environ["CONTAINER_NAME"]
+        for local_file in [args.train_out, args.test_out]:
+            try:
+                url = upload_file_to_blob(
+                    storage_account=storage_account,
+                    container_name=container_name,
+                    blob_name=Path(local_file).name,
+                    local_path=str(local_file),
+                )
+                logger.info("Uploaded to blob storage: %s", url)
+            except Exception as e:
+                logger.error("Failed to upload %s: %s", local_file, e)
+    else:
+        logger.info("Skipping blob storage upload (--no-upload)")
 
 
 if __name__ == "__main__":

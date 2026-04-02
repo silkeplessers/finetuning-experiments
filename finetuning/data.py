@@ -102,7 +102,7 @@ def perplexity(text: str, max_length: int = 512) -> float:
     return math.exp(loss.item())
 
 
-def perplexity_batch(texts: list[str], batch_size: int = 64, max_length: int = 512) -> list[float]:
+def perplexity_batch(texts: list[str], batch_size: int = 16, max_length: int = 512) -> list[float]:
     """Compute perplexity for a list of texts in batches on GPU. Much faster than one-by-one."""
     model, tokenizer = _get_perplexity_model()
     if tokenizer.pad_token is None:
@@ -236,7 +236,7 @@ def heuristic_quality_score(row: dict) -> dict:
 
 
 def heuristic_quality_score_batch(
-    rows: list[dict], batch_size: int = 64
+    rows: list[dict], batch_size: int = 16
 ) -> list[dict]:
     """Score rows in bulk. Batches perplexity on GPU; fastText runs on CPU per-row.
 
