@@ -5,13 +5,13 @@ Results are uploaded to Azure Blob Storage.
 
 Usage:
     # Baseline only
-    python scripts/run_inference.py --config configs/qlora_config.json --test-data datasets/alpaca_test.jsonl --mode baseline
+    python scripts/inference/run_inference.py --config configs/qlora_config.json --test-data datasets/alpaca_test.jsonl --mode baseline
 
     # Finetuned only
-    python scripts/run_inference.py --config configs/qlora_config.json --test-data datasets/alpaca_test.jsonl --mode finetuned
+    python scripts/inference/run_inference.py --config configs/qlora_config.json --test-data datasets/alpaca_test.jsonl --mode finetuned
 
     # Both
-    python scripts/run_inference.py --config configs/qlora_config.json --test-data datasets/alpaca_test.jsonl --mode both
+    python scripts/inference/run_inference.py --config configs/qlora_config.json --test-data datasets/alpaca_test.jsonl --mode both
 """
 
 import argparse
@@ -29,7 +29,8 @@ import torch
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 sys.path.insert(0, _PROJECT_ROOT)
 
-from finetuning.blob_storage import download_blob_directory, upload_file_to_blob
+from finetuning.blob_storage import (download_blob_directory,
+                                     upload_file_to_blob)
 from finetuning.config import load_config
 from finetuning.data import load_jsonl, merge_instruction_into_input
 from finetuning.inference import run_inference

@@ -16,25 +16,25 @@ Runs inference on the test set using the baseline model, the fine-tuned model, o
 
 ```bash
 # Run both baseline and finetuned inference
-python scripts/inference-scripts/run_inference.py \
+python scripts/inference/run_inference.py \
     --config configs/qlora_config.json \
     --test-data datasets/alpaca_test.jsonl
 
 # Baseline only
-python scripts/inference-scripts/run_inference.py \
+python scripts/inference/run_inference.py \
     --config configs/qlora_config.json \
     --test-data datasets/alpaca_test.jsonl \
     --mode baseline
 
 # Finetuned only, limit to 50 samples
-python scripts/inference-scripts/run_inference.py \
+python scripts/inference/run_inference.py \
     --config configs/qlora_config.json \
     --test-data datasets/alpaca_test.jsonl \
     --mode finetuned \
     --max-samples 50
 
 # Custom batch size and token limit
-python scripts/inference-scripts/run_inference.py \
+python scripts/inference/run_inference.py \
     --config configs/qlora_config.json \
     --test-data datasets/alpaca_test.jsonl \
     --batch-size 4 \

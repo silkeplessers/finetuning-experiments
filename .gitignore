@@ -7,3 +7,4 @@ outputs/*
 finetuning/__pycache__/*
 .ipynb_aml_checkpoints/*
 *.amltmp
+models/lid.176.bin

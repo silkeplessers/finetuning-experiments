@@ -25,24 +25,25 @@ finetuning-experiments/
 ├── finetuning/                        # Shared Python modules
 │   ├── blob_storage.py                # Azure Blob upload/download helpers
 │   ├── config.py                      # Config loader
-│   ├── data.py                        # Dataset loading and preprocessing
+│   ├── data.py                        # Dataset loading, preprocessing, splitting
+│   ├── formatting.py                  # Chat template formatting helpers
 │   ├── inference.py                   # Inference utilities
 │   ├── model.py                       # Model loading (base + finetuned)
-│   └── prompts.py                     # System prompt and chat template builders
+│   ├── prompts.py                     # System prompt and chat template builders
+│   └── schemas.py                     # Pydantic models for structured output
 ├── scripts/
-│   ├── data-processing/               # Data pipeline scripts
+│   ├── data/                          # Data pipeline scripts
 │   │   ├── clean_dataset.py           # Remove duplicates, english, code, math
 │   │   ├── split_dataset.py           # Random train/test split
 │   │   ├── generate_synthetic_data.py # Generate Dutch data via Azure OpenAI
 │   │   ├── merge_synthetic_data.py    # Append synthetic data to train/test
-│   │   ├── format_dataset.py          # Format for Mistral chat template
-│   │   └── formatting.py             # Formatting helpers
-│   ├── training-scripts/
+│   │   └── format_dataset.py          # Format for Mistral chat template
+│   ├── training/
 │   │   ├── finetune_qlora.py          # QLoRA finetuning with Unsloth
 │   │   └── submit_azureml_job.py      # Submit training job to Azure ML
-│   ├── evaluation-scripts/
+│   ├── evaluation/
 │   │   └── run_evaluation.py          # Evaluate finetuned vs base model
-│   └── inference-scripts/
+│   └── inference/
 │       └── run_inference.py           # Run inference on finetuned model
 ├── outputs/                           # Training checkpoints and merged models
 ├── azureml/                           # Azure ML environment config
@@ -73,37 +74,37 @@ Run the scripts in order (from the project root):
 
 ```bash
 # 1. Clean the original dataset (removes duplicates, english, code, math)
-python scripts/data-processing/clean_dataset.py
+python scripts/data/clean_dataset.py
 
 # 2. Split into train/test (80/20)
-python scripts/data-processing/split_dataset.py --data datasets/alpaca_data_cleaned-dutch-clean.jsonl
+python scripts/data/split_dataset.py --data datasets/alpaca_data_cleaned-dutch-clean.jsonl
 
 # 3. Generate synthetic Dutch data via Azure OpenAI
-python scripts/data-processing/generate_synthetic_data.py --num-examples 5000 --concurrency 50
+python scripts/data/generate_synthetic_data.py --num-examples 5000 --concurrency 50
 
 # 4. Merge synthetic data into train/test (70/30 split)
-python scripts/data-processing/merge_synthetic_data.py
+python scripts/data/merge_synthetic_data.py
 
 # 5. Format for Mistral chat template
-python scripts/data-processing/format_dataset.py --data datasets/alpaca_train.jsonl --config configs/qlora_config.json
-python scripts/data-processing/format_dataset.py --data datasets/alpaca_test.jsonl --config configs/qlora_config.json --output datasets/alpaca_test_formatted
+python scripts/data/format_dataset.py --data datasets/alpaca_train.jsonl --config configs/qlora_config.json
+python scripts/data/format_dataset.py --data datasets/alpaca_test.jsonl --config configs/qlora_config.json --output datasets/alpaca_test_formatted
 ```
 
 ## Training
 
 ```bash
 # Local training
-python scripts/training-scripts/finetune_qlora.py --config configs/qlora_config.json
+python scripts/training/finetune_qlora.py --config configs/qlora_config.json
 
 # Submit to Azure ML
-python scripts/training-scripts/submit_azureml_job.py --config configs/qlora_config.json
+python scripts/training/submit_azureml_job.py --config configs/qlora_config.json
 ```
 
 ## Inference & Evaluation
 
 ```bash
-python scripts/inference-scripts/run_inference.py --config configs/qlora_config.json
-python scripts/evaluation-scripts/run_evaluation.py --config configs/qlora_config.json
+python scripts/inference/run_inference.py --config configs/qlora_config.json
+python scripts/evaluation/run_evaluation.py --config configs/qlora_config.json
 ```
 
 ## Model

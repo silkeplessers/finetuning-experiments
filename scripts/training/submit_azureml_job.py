@@ -56,7 +56,7 @@ def main() -> None:
     if not train_data_path.is_absolute():
         train_data_path = (repo_root / train_data_path).resolve()
 
-    code_dir = (repo_root / "scripts").resolve()
+    code_dir = (repo_root / "scripts" / "training").resolve()
     conda_file = (repo_root / "azureml" / "conda.yml").resolve()
 
     environment = Environment(

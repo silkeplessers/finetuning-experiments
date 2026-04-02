@@ -5,7 +5,7 @@ Assesses:
   2. Instruction following    (faithfulness to expected output)
 
 Usage:
-    python scripts/run_evaluation.py \
+    python scripts/evaluation/run_evaluation.py \
         --config configs/qlora_config.json \
         --model-label baseline \
         --azure-endpoint https://finetuning-foundry.openai.azure.com \
@@ -34,7 +34,8 @@ import pandas as pd
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 sys.path.insert(0, _PROJECT_ROOT)
 
-from finetuning.blob_storage import download_blob_directory, upload_file_to_blob
+from finetuning.blob_storage import (download_blob_directory,
+                                     upload_file_to_blob)
 from finetuning.config import load_config
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -74,7 +75,8 @@ Reply with ONLY a JSON object (no markdown fences):
 
 def build_judge_client(azure_endpoint: str):
     """Create an Azure OpenAI client using Entra ID (DefaultAzureCredential)."""
-    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+    from azure.identity import (DefaultAzureCredential,
+                                get_bearer_token_provider)
     from openai import AzureOpenAI
 
     token_provider = get_bearer_token_provider(

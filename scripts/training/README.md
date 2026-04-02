@@ -12,10 +12,10 @@ Experiment tracking is done via Weights & Biases (configured in the config JSON)
 
 ```bash
 # Minimal — uses paths from the config
-python scripts/training-scripts/finetune_qlora.py --config configs/qlora_config.json
+python scripts/training/finetune_qlora.py --config configs/qlora_config.json
 
 # Override dataset and output directory
-python scripts/training-scripts/finetune_qlora.py \
+python scripts/training/finetune_qlora.py \
     --config configs/qlora_config.json \
     --train-data datasets/alpaca_train_formatted \
     --model-output-dir outputs/
@@ -66,7 +66,7 @@ Requires:
 - An `.env` file in the project root (optional, for loading env vars)
 
 ```bash
-python scripts/training-scripts/submit_azureml_job.py --config configs/qlora_config.json
+python scripts/training/submit_azureml_job.py --config configs/qlora_config.json
 ```
 
 | Parameter | Required | Default | Description |

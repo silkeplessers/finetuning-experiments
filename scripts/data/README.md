@@ -30,7 +30,7 @@ Cleans the raw `alpaca_data_cleaned-dutch.jsonl` dataset by removing:
 **Output:** `datasets/alpaca_data_cleaned-dutch-clean.jsonl` (hardcoded)
 
 ```bash
-python scripts/data-processing/clean_dataset.py
+python scripts/data/clean_dataset.py
 ```
 
 No parameters — input/output paths are defined as constants in the script. Prints a detailed summary of what was removed and why.
@@ -42,7 +42,7 @@ No parameters — input/output paths are defined as constants in the script. Pri
 Splits a cleaned JSONL dataset into train and test sets. Merges the `instruction` and `input` columns into a single `prompt` column before splitting.
 
 ```bash
-python scripts/data-processing/split_dataset.py --data datasets/alpaca_data_cleaned-dutch-clean.jsonl
+python scripts/data/split_dataset.py --data datasets/alpaca_data_cleaned-dutch-clean.jsonl
 ```
 
 | Parameter | Required | Default | Description |
@@ -68,13 +68,13 @@ Requires the following environment variables (loaded from `.env` in the project 
 
 ```bash
 # Generate 5000 examples (default)
-python scripts/data-processing/generate_synthetic_data.py
+python scripts/data/generate_synthetic_data.py
 
 # Generate 100 examples with lower concurrency, skip upload
-python scripts/data-processing/generate_synthetic_data.py --num-examples 100 --concurrency 5 --no-upload
+python scripts/data/generate_synthetic_data.py --num-examples 100 --concurrency 5 --no-upload
 
 # Preview a sample prompt without making API calls
-python scripts/data-processing/generate_synthetic_data.py --dry-run
+python scripts/data/generate_synthetic_data.py --dry-run
 ```
 
 | Parameter | Required | Default | Description |
@@ -95,13 +95,13 @@ Requires the same `STORAGE_ACCOUNT` and `CONTAINER_NAME` environment variables a
 
 ```bash
 # Merge with defaults and upload
-python scripts/data-processing/merge_synthetic_data.py
+python scripts/data/merge_synthetic_data.py
 
 # Merge without uploading
-python scripts/data-processing/merge_synthetic_data.py --no-upload
+python scripts/data/merge_synthetic_data.py --no-upload
 
 # Use a custom synthetic file and train/test split ratio
-python scripts/data-processing/merge_synthetic_data.py --synthetic datasets/my_synthetic.jsonl --train-frac 0.8
+python scripts/data/merge_synthetic_data.py --synthetic datasets/my_synthetic.jsonl --train-frac 0.8
 ```
 
 | Parameter | Required | Default | Description |
@@ -120,7 +120,7 @@ python scripts/data-processing/merge_synthetic_data.py --synthetic datasets/my_s
 Applies a chat template to the train JSONL file and saves it as a HuggingFace Dataset on disk. Uses the tokenizer specified in the QLoRA config to format each (prompt, output) pair into the model's expected chat format.
 
 ```bash
-python scripts/data-processing/format_dataset.py --data datasets/alpaca_train.jsonl --config configs/qlora_config.json
+python scripts/data/format_dataset.py --data datasets/alpaca_train.jsonl --config configs/qlora_config.json
 ```
 
 | Parameter | Required | Default | Description |
@@ -129,25 +129,22 @@ python scripts/data-processing/format_dataset.py --data datasets/alpaca_train.js
 | `--config` | Yes | — | Path to the QLoRA config JSON (used to resolve the tokenizer/model name) |
 | `--output` | No | `datasets/alpaca_train_formatted` | Output directory for the formatted HuggingFace dataset |
 
-### Supporting module: `formatting.py`
-
-Helper used by `format_dataset.py`. Wraps each (prompt, output) pair into the model's chat template via `finetuning.prompts.build_training_text`. Not called directly.
 
 ## Full Example
 
 ```bash
 # 1. Clean the raw dataset
-python scripts/data-processing/clean_dataset.py
+python scripts/data/clean_dataset.py
 
 # 2. Split into train/test
-python scripts/data-processing/split_dataset.py --data datasets/alpaca_data_cleaned-dutch-clean.jsonl
+python scripts/data/split_dataset.py --data datasets/alpaca_data_cleaned-dutch-clean.jsonl
 
 # 3. (Optional) Generate synthetic data
-python scripts/data-processing/generate_synthetic_data.py --num-examples 5000
+python scripts/data/generate_synthetic_data.py --num-examples 5000
 
 # 4. (Optional) Merge synthetic data into train/test
-python scripts/data-processing/merge_synthetic_data.py
+python scripts/data/merge_synthetic_data.py
 
 # 5. Format for training
-python scripts/data-processing/format_dataset.py --data datasets/alpaca_train.jsonl --config configs/qlora_config.json
+python scripts/data/format_dataset.py --data datasets/alpaca_train.jsonl --config configs/qlora_config.json
 ```

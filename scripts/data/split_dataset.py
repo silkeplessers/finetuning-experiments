@@ -1,46 +1,22 @@
 """Split a raw JSONL dataset into train and test sets.
 
 Usage:
-    python scripts/split_dataset.py --data datasets/alpaca_data_cleaned-dutch.jsonl
-    python scripts/split_dataset.py --data datasets/alpaca_data_cleaned-dutch.jsonl --train-frac 0.9
+    python scripts/data/split_dataset.py --data datasets/alpaca_data_cleaned-dutch.jsonl
+    python scripts/data/split_dataset.py --data datasets/alpaca_data_cleaned-dutch.jsonl --train-frac 0.9
 """
 
 import argparse
 import logging
+import sys
+from pathlib import Path
 
-import pandas as pd
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+from finetuning.data import (load_jsonl, merge_instruction_into_input,
+                             split_train_test)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
-
-
-def load_jsonl(path: str) -> pd.DataFrame:
-    return pd.read_json(path, lines=True)
-
-
-def merge_instruction_into_input(
-    df: pd.DataFrame,
-    instruction_col: str = "instruction",
-    input_col: str = "input",
-) -> pd.DataFrame:
-    """Concatenate the instruction and input columns into a single input column."""
-    df = df.copy()
-    df["prompt"] = (
-        df[instruction_col].fillna("").str.strip()
-        + "\ninput: "
-        + df[input_col].fillna("").str.strip()
-    ).str.strip()
-    return df
-
-
-def split_train_test(
-    data: pd.DataFrame,
-    train_frac: float = 0.8,
-    random_state: int = 42,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    train = data.sample(frac=train_frac, random_state=random_state).reset_index(drop=True)
-    test = data.drop(train.index).reset_index(drop=True)
-    return train, test
 
 
 def parse_args() -> argparse.Namespace:

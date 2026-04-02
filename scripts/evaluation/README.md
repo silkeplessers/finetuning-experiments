@@ -20,28 +20,28 @@ Results are uploaded back to Azure Blob Storage alongside the inference results.
 
 ```bash
 # Evaluate baseline results
-python scripts/evaluation-scripts/run_evaluation.py \
+python scripts/evaluation/run_evaluation.py \
     --config configs/qlora_config.json \
     --model-label baseline \
     --azure-endpoint https://your-endpoint.openai.azure.com \
     --judge-model grok-4-fast-reasoning
 
 # Evaluate finetuned results
-python scripts/evaluation-scripts/run_evaluation.py \
+python scripts/evaluation/run_evaluation.py \
     --config configs/qlora_config.json \
     --model-label run_r16_a16_e1_b16 \
     --azure-endpoint https://your-endpoint.openai.azure.com \
     --judge-model grok-4-fast-reasoning
 
 # Evaluate from a local file instead of blob storage
-python scripts/evaluation-scripts/run_evaluation.py \
+python scripts/evaluation/run_evaluation.py \
     --config configs/qlora_config.json \
     --model-label baseline \
     --azure-endpoint https://your-endpoint.openai.azure.com \
     --local-results outputs/my_inference_results.jsonl
 
 # Increase judge concurrency
-python scripts/evaluation-scripts/run_evaluation.py \
+python scripts/evaluation/run_evaluation.py \
     --config configs/qlora_config.json \
     --model-label baseline \
     --azure-endpoint https://your-endpoint.openai.azure.com \

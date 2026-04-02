@@ -1,19 +1,24 @@
 """Format a train JSONL split into a HuggingFace Dataset with chat-template prompts.
 
 Usage:
-    python scripts/format_dataset.py --data datasets/alpaca_train.jsonl --config configs/qlora_config.json
-    python scripts/format_dataset.py --data datasets/alpaca_train.jsonl --config configs/qlora_config.json --output datasets/alpaca_train_formatted
+    python scripts/data/format_dataset.py --data datasets/alpaca_train.jsonl --config configs/qlora_config.json
+    python scripts/data/format_dataset.py --data datasets/alpaca_train.jsonl --config configs/qlora_config.json --output datasets/alpaca_train_formatted
 """
 
 import argparse
 import json
 import logging
+import sys
+from pathlib import Path
 
 import pandas as pd
-from datasets import Dataset
 from transformers import AutoTokenizer
 
-from formatting import format_prompt_batch
+from datasets import Dataset
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+from finetuning.formatting import format_prompt_batch
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
