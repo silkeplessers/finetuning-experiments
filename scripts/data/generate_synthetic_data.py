@@ -19,9 +19,9 @@ import sys
 import time
 from pathlib import Path
 
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
 # Add project root to path so we can import finetuning helpers
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -133,9 +133,18 @@ TASK_TYPES = [
 
 LENGTH_INSTRUCTIONS = [
     ("kort", "Het antwoord moet kort en bondig zijn (1-3 zinnen)."),
-    ("middellang", "Het antwoord moet middellang zijn (1-2 alinea's, ongeveer 50-100 woorden)."),
-    ("uitgebreid", "Het antwoord moet uitgebreid en gedetailleerd zijn (2-4 alinea's, ongeveer 150-250 woorden)."),
-    ("zeer uitgebreid", "Het antwoord moet zeer uitgebreid zijn met meerdere alinea's, voorbeelden en nuance (250-400 woorden, niet meer dan 400)."),
+    (
+        "middellang",
+        "Het antwoord moet middellang zijn (1-2 alinea's, ongeveer 50-100 woorden).",
+    ),
+    (
+        "uitgebreid",
+        "Het antwoord moet uitgebreid en gedetailleerd zijn (2-4 alinea's, ongeveer 150-250 woorden).",
+    ),
+    (
+        "zeer uitgebreid",
+        "Het antwoord moet zeer uitgebreid zijn met meerdere alinea's, voorbeelden en nuance (250-400 woorden, niet meer dan 400).",
+    ),
 ]
 
 # Weights: more medium/long to balance the short Alpaca data
@@ -215,9 +224,7 @@ async def generate_batch(client, semaphore, batch_id, n=EXAMPLES_PER_CALL):
                             }
                         )
 
-            logger.info(
-                f"Batch {batch_id}: generated {len(valid)}/{n} valid examples"
-            )
+            logger.info(f"Batch {batch_id}: generated {len(valid)}/{n} valid examples")
             return valid
 
         except Exception as e:
@@ -225,7 +232,9 @@ async def generate_batch(client, semaphore, batch_id, n=EXAMPLES_PER_CALL):
             return []
 
 
-async def generate_all(num_examples, concurrency, output_path, dry_run=False, no_upload=False):
+async def generate_all(
+    num_examples, concurrency, output_path, dry_run=False, no_upload=False
+):
     """Generate all examples with async batching."""
     token_provider = get_bearer_token_provider(
         DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
@@ -255,9 +264,7 @@ async def generate_all(num_examples, concurrency, output_path, dry_run=False, no
     start = time.time()
 
     # Launch all batches concurrently (semaphore limits actual concurrency)
-    tasks = [
-        generate_batch(client, semaphore, i + 1) for i in range(num_batches)
-    ]
+    tasks = [generate_batch(client, semaphore, i + 1) for i in range(num_batches)]
     results = await asyncio.gather(*tasks)
 
     # Flatten and assign IDs
@@ -269,9 +276,7 @@ async def generate_all(num_examples, concurrency, output_path, dry_run=False, no
     all_examples = all_examples[:num_examples]
     for i, ex in enumerate(all_examples, 1):
         ex["id"] = i
-        ex["prompt"] = (
-            ex["instruction"] + "\ninput: " + ex["input"]
-        ).strip()
+        ex["prompt"] = (ex["instruction"] + "\ninput: " + ex["input"]).strip()
 
     elapsed = time.time() - start
 

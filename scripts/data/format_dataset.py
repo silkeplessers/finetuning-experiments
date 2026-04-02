@@ -33,7 +33,10 @@ def format_dataset(
     hf_dataset = Dataset.from_pandas(df)
     return hf_dataset.map(
         lambda batch: format_prompt_batch(
-            batch, tokenizer, input_column, output_column,
+            batch,
+            tokenizer,
+            input_column,
+            output_column,
         ),
         batched=True,
         remove_columns=hf_dataset.column_names,
@@ -45,15 +48,21 @@ def parse_args() -> argparse.Namespace:
         description="Apply a chat template to a JSONL split and save as a HuggingFace Dataset.",
     )
     parser.add_argument(
-        "--data", type=str, required=True,
+        "--data",
+        type=str,
+        required=True,
         help="Path to the train JSONL file (output of split_dataset.py)",
     )
     parser.add_argument(
-        "--config", type=str, required=True,
+        "--config",
+        type=str,
+        required=True,
         help="Path to the qlora config JSON (used to resolve the tokenizer)",
     )
     parser.add_argument(
-        "--output", type=str, default="datasets/alpaca_train_formatted",
+        "--output",
+        type=str,
+        default="datasets/alpaca_train_formatted",
         help="Output directory for the formatted HF dataset (default: datasets/alpaca_train_formatted)",
     )
     return parser.parse_args()

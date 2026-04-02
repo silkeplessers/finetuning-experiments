@@ -1,4 +1,3 @@
-
 """Run inference on the test dataset using the baseline and/or finetuned model.
 
 Results are uploaded to Azure Blob Storage.
@@ -29,8 +28,7 @@ import torch
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 sys.path.insert(0, _PROJECT_ROOT)
 
-from finetuning.blob_storage import (download_blob_directory,
-                                     upload_file_to_blob)
+from finetuning.blob_storage import download_blob_directory, upload_file_to_blob
 from finetuning.config import load_config
 from finetuning.data import load_jsonl, merge_instruction_into_input
 from finetuning.inference import run_inference
@@ -46,18 +44,58 @@ RESULTS_CONTAINER = "inference-results"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run inference on the test set")
-    parser.add_argument("--config", type=str, required=True, help="Path to qlora_config.json")
-    parser.add_argument("--test-data", type=str, required=True, help="Path to test JSONL (e.g. datasets/alpaca_test.jsonl)")
     parser.add_argument(
-        "--mode", type=str, choices=["baseline", "finetuned", "both"], default="both",
+        "--config", type=str, required=True, help="Path to qlora_config.json"
+    )
+    parser.add_argument(
+        "--test-data",
+        type=str,
+        required=True,
+        help="Path to test JSONL (e.g. datasets/alpaca_test.jsonl)",
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["baseline", "finetuned", "both"],
+        default="both",
         help="Which model(s) to run inference with (default: both)",
     )
-    parser.add_argument("--max-new-tokens", type=int, default=1000, help="Max tokens to generate per example")
-    parser.add_argument("--batch-size", type=int, default=8, help="Batch size for inference (default: 8)")
-    parser.add_argument("--max-samples", type=int, default=None, help="Limit test set to N random samples (default: use all)")
-    parser.add_argument("--storage-account", type=str, default=STORAGE_ACCOUNT, help="Azure storage account name")
-    parser.add_argument("--results-container", type=str, default=RESULTS_CONTAINER, help="Blob container for inference results")
-    parser.add_argument("--adapter-container", type=str, default=ADAPTER_CONTAINER, help="Blob container with LoRA adapters")
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=1000,
+        help="Max tokens to generate per example",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=8,
+        help="Batch size for inference (default: 8)",
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=None,
+        help="Limit test set to N random samples (default: use all)",
+    )
+    parser.add_argument(
+        "--storage-account",
+        type=str,
+        default=STORAGE_ACCOUNT,
+        help="Azure storage account name",
+    )
+    parser.add_argument(
+        "--results-container",
+        type=str,
+        default=RESULTS_CONTAINER,
+        help="Blob container for inference results",
+    )
+    parser.add_argument(
+        "--adapter-container",
+        type=str,
+        default=ADAPTER_CONTAINER,
+        help="Blob container with LoRA adapters",
+    )
     return parser.parse_args()
 
 
@@ -106,10 +144,14 @@ def run_baseline(
         load_in_4bit=model_cfg["load_in_4bit"],
     )
 
-    predictions = run_inference(model, tokenizer, test_df["prompt"].tolist(), max_new_tokens, batch_size)
+    predictions = run_inference(
+        model, tokenizer, test_df["prompt"].tolist(), max_new_tokens, batch_size
+    )
 
     results = test_df[["prompt", "output"]].copy()
-    results.rename(columns={"prompt": "input", "output": "expected_output"}, inplace=True)
+    results.rename(
+        columns={"prompt": "input", "output": "expected_output"}, inplace=True
+    )
     results["predicted_output"] = predictions
     results["model"] = "baseline"
 
@@ -136,11 +178,16 @@ def run_finetuned(
     final_model_subdir = config["training"]["final_model_subdir"]
     blob_prefix = f"{run_name}/{final_model_subdir}/"
 
-    logger.info("Downloading LoRA adapters from %s/%s ...", adapter_container, blob_prefix)
+    logger.info(
+        "Downloading LoRA adapters from %s/%s ...", adapter_container, blob_prefix
+    )
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         adapter_local = download_blob_directory(
-            storage_account, adapter_container, blob_prefix, tmp_dir,
+            storage_account,
+            adapter_container,
+            blob_prefix,
+            tmp_dir,
         )
 
         logger.info("Loading finetuned model from adapter: %s", adapter_local)
@@ -150,10 +197,14 @@ def run_finetuned(
             load_in_4bit=model_cfg["load_in_4bit"],
         )
 
-        predictions = run_inference(model, tokenizer, test_df["prompt"].tolist(), max_new_tokens, batch_size)
+        predictions = run_inference(
+            model, tokenizer, test_df["prompt"].tolist(), max_new_tokens, batch_size
+        )
 
     results = test_df[["prompt", "output"]].copy()
-    results.rename(columns={"prompt": "input", "output": "expected_output"}, inplace=True)
+    results.rename(
+        columns={"prompt": "input", "output": "expected_output"}, inplace=True
+    )
     results["predicted_output"] = predictions
     results["model"] = run_name
 
@@ -174,13 +225,25 @@ def main() -> None:
 
     if args.mode in ("baseline", "both"):
         logger.info("--- Running baseline inference ---")
-        run_baseline(config, test_df, args.max_new_tokens, args.batch_size, args.storage_account, args.results_container)
+        run_baseline(
+            config,
+            test_df,
+            args.max_new_tokens,
+            args.batch_size,
+            args.storage_account,
+            args.results_container,
+        )
 
     if args.mode in ("finetuned", "both"):
         logger.info("--- Running finetuned inference ---")
         run_finetuned(
-            config, test_df, args.max_new_tokens, args.batch_size,
-            args.storage_account, args.adapter_container, args.results_container,
+            config,
+            test_df,
+            args.max_new_tokens,
+            args.batch_size,
+            args.storage_account,
+            args.adapter_container,
+            args.results_container,
         )
 
     logger.info("Done.")

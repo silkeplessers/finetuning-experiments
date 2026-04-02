@@ -77,12 +77,15 @@ DUTCH_COMMON = set(
     "niet door ook uit nog kan naar maar om bij al wel dan zou hun hem haar "
     "meer geen dit werd tot ze had wat heeft die ik je we".split()
 )
-ENGLISH_ONLY = set(
-    "the a an are were be been being have has had do does did will would "
-    "shall should can could may might must to of and that it for on with "
-    "as at by from or but not this which what when where who how all each "
-    "every some any no".split()
-) - DUTCH_COMMON  # subtract words shared with Dutch
+ENGLISH_ONLY = (
+    set(
+        "the a an are were be been being have has had do does did will would "
+        "shall should can could may might must to of and that it for on with "
+        "as at by from or but not this which what when where who how all each "
+        "every some any no".split()
+    )
+    - DUTCH_COMMON
+)  # subtract words shared with Dutch
 
 
 def english_word_ratio(text: str) -> float:
@@ -167,9 +170,7 @@ MATH_INSTRUCTION = re.compile(
 )
 
 # 5b. Output is predominantly numeric (math result)
-MATH_OUTPUT = re.compile(
-    r"^\s*-?[\d.,/%°]+\s*$"  # output is just a number/percentage
-)
+MATH_OUTPUT = re.compile(r"^\s*-?[\d.,/%°]+\s*$")  # output is just a number/percentage
 
 # 5c. Content has math expressions
 MATH_EXPRESSIONS = re.compile(
@@ -247,6 +248,8 @@ for reason, label in category_labels.items():
 print(f"\n{'─' * 55}")
 print(f"  Total rows removed (unique):           {len(flagged_ids):>5,}")
 print(f"  Rows remaining:                        {len(cleaned):>5,}")
-print(f"  Removal rate:                          {100 * len(flagged_ids) / total:>5.1f}%")
+print(
+    f"  Removal rate:                          {100 * len(flagged_ids) / total:>5.1f}%"
+)
 print(f"{'=' * 55}")
 print(f"\nCleaned dataset written to: {OUTPUT_PATH}")

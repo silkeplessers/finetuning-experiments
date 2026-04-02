@@ -18,7 +18,7 @@ def load_config(config_path: str) -> dict:
         return json.load(file_handle)
 
 
-def load_train_dataset(path:str) -> Dataset:
+def load_train_dataset(path: str) -> Dataset:
     hf_train_data = load_from_disk(path, keep_in_memory=True)
     return hf_train_data
 
@@ -40,7 +40,6 @@ def init_wandb(config: dict, peft_config) -> wandb.sdk.wandb_run.Run | None:
         name=wandb_cfg["run_name"],
         config=wandb_run_config,
     )
-
 
 
 def sanitize_path_component(value: str) -> str:
@@ -75,7 +74,9 @@ def build_sft_config(config: dict, output_dir: str) -> SFTConfig:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fine-tune a QLoRA model from JSON config")
+    parser = argparse.ArgumentParser(
+        description="Fine-tune a QLoRA model from JSON config"
+    )
     parser.add_argument("--config", required=True, help="Path to qlora_config.json")
     parser.add_argument(
         "--train-data",
@@ -92,7 +93,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    
+
     # initialize model and tokenizer
     model_cfg = config["model"]
     model, tokenizer = FastLanguageModel.from_pretrained(
@@ -100,7 +101,7 @@ def main() -> None:
         max_seq_length=model_cfg["max_seq_length"],
         load_in_4bit=model_cfg["load_in_4bit"],
     )
-    
+
     # apply peft/qlora to model
     lora_cfg = config["lora"]
     model = FastLanguageModel.get_peft_model(
@@ -115,24 +116,28 @@ def main() -> None:
         use_rslora=lora_cfg["use_rslora"],
         loftq_config=lora_cfg["loftq_config"],
     )
-    
+
     # load pre-formatted dataset
     train_data_path = args.train_data or config["data"]["train_data_path"]
     formatted_dataset = load_train_dataset(train_data_path)
-    
+
     # intialize wandb experiment tracking
     run = init_wandb(config, model.peft_config)
-    
+
     # determine output directories for trainer and final model
     run_dir_name = resolve_run_name(config, run)
-    
+
     training_cfg = config["training"]
     configured_output_dir = Path(training_cfg.get("output_dir", "outputs/run"))
 
     if args.model_output_dir:
         output_root_dir = Path(args.model_output_dir)
     else:
-        output_root_dir = configured_output_dir.parent if configured_output_dir.parent != Path("") else configured_output_dir
+        output_root_dir = (
+            configured_output_dir.parent
+            if configured_output_dir.parent != Path("")
+            else configured_output_dir
+        )
 
     run_dir = output_root_dir / run_dir_name
     trainer_output_dir = run_dir / "trainer"
@@ -142,11 +147,11 @@ def main() -> None:
     # initialize trainer and start training
     trainer = SFTTrainer(
         model=model,
-        processing_class = tokenizer,
+        processing_class=tokenizer,
         train_dataset=formatted_dataset,
-        #dataset_text_field="text",
-        #max_seq_length=model_cfg["max_seq_length"],
-        #packing=sft_config.packing,
+        # dataset_text_field="text",
+        # max_seq_length=model_cfg["max_seq_length"],
+        # packing=sft_config.packing,
         args=sft_config,
     )
 

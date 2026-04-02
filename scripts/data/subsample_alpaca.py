@@ -21,11 +21,9 @@ import sys
 import time
 from pathlib import Path
 
-from tqdm import tqdm
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-from finetuning.data import heuristic_quality_score
+from finetuning.data import heuristic_quality_score_batch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -85,14 +83,14 @@ def heuristic_prefilter(rows: list[dict], top_n: int) -> tuple[list[dict], list[
 
     all_scored is a list of dicts with id, instruction (truncated), scores, and kept/rejected status.
     """
-    logger.info("Stage 1: scoring %d rows with fastText LID + Dutch GPT-2 perplexity...", len(rows))
+    logger.info(
+        "Stage 1: scoring %d rows with fastText LID + Dutch GPT-2 perplexity (batched)...",
+        len(rows),
+    )
 
-    all_scored = []
-    row_scores = []
-    for r in tqdm(rows, desc="Scoring"):
-        scores = heuristic_quality_score(r)
-        row_scores.append((scores["total"], r, scores))
+    scores_list = heuristic_quality_score_batch(rows, batch_size=64)
 
+    row_scores = [(scores["total"], r, scores) for r, scores in zip(rows, scores_list)]
     row_scores.sort(key=lambda x: x[0], reverse=True)
 
     # Build log entries with kept/rejected status
@@ -100,13 +98,16 @@ def heuristic_prefilter(rows: list[dict], top_n: int) -> tuple[list[dict], list[
     for _, r, _ in row_scores[:top_n]:
         kept_ids.add(r["id"])
 
+    all_scored = []
     for total, r, scores in row_scores:
-        all_scored.append({
-            "id": r["id"],
-            "instruction": r["instruction"][:120],
-            "stage1_status": "kept" if r["id"] in kept_ids else "rejected",
-            **scores,
-        })
+        all_scored.append(
+            {
+                "id": r["id"],
+                "instruction": r["instruction"][:120],
+                "stage1_status": "kept" if r["id"] in kept_ids else "rejected",
+                **scores,
+            }
+        )
 
     totals = [s for s, _, _ in row_scores]
     logger.info("Heuristic score distribution (%d rows):", len(totals))
@@ -116,7 +117,11 @@ def heuristic_prefilter(rows: list[dict], top_n: int) -> tuple[list[dict], list[
 
     candidates = [r for _, r, _ in row_scores[:top_n]]
     cutoff = row_scores[top_n - 1][0] if top_n <= len(row_scores) else 0
-    logger.info("Stage 1: kept %d candidates (min heuristic score: %.2f)", len(candidates), cutoff)
+    logger.info(
+        "Stage 1: kept %d candidates (min heuristic score: %.2f)",
+        len(candidates),
+        cutoff,
+    )
     return candidates, all_scored
 
 
@@ -135,8 +140,7 @@ def build_judge_prompt(batch: list[dict]) -> str:
         )
     return (
         f"Beoordeel de volgende {len(batch)} voorbeelden. "
-        f"Geef voor elk voorbeeld exact drie scores.\n\n"
-        + "\n\n".join(parts)
+        f"Geef voor elk voorbeeld exact drie scores.\n\n" + "\n\n".join(parts)
     )
 
 
@@ -171,7 +175,9 @@ async def score_batch(
             if not parsed or len(parsed.scores) != len(batch):
                 logger.warning(
                     "Batch %d: expected %d scores, got %d",
-                    batch_id, len(batch), len(parsed.scores) if parsed else 0,
+                    batch_id,
+                    len(batch),
+                    len(parsed.scores) if parsed else 0,
                 )
                 return [None] * len(batch)
 
@@ -187,8 +193,7 @@ async def llm_score_all(
     concurrency: int,
 ) -> list[tuple[float, dict]]:
     """Score all candidates with the LLM judge and return (combined_score, row) pairs."""
-    from azure.identity import (DefaultAzureCredential,
-                                get_bearer_token_provider)
+    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
     from dotenv import load_dotenv
     from openai import AsyncOpenAI
 
@@ -204,12 +209,13 @@ async def llm_score_all(
 
     # Split into batches
     batches = [
-        candidates[i : i + BATCH_SIZE]
-        for i in range(0, len(candidates), BATCH_SIZE)
+        candidates[i : i + BATCH_SIZE] for i in range(0, len(candidates), BATCH_SIZE)
     ]
     logger.info(
         "Stage 2: scoring %d candidates in %d batches (concurrency=%d)",
-        len(candidates), len(batches), concurrency,
+        len(candidates),
+        len(batches),
+        concurrency,
     )
 
     start = time.time()
@@ -241,7 +247,9 @@ async def llm_score_all(
 
     logger.info(
         "Stage 2: scored %d, failed %d in %.1fs",
-        scored_count, failed_count, elapsed,
+        scored_count,
+        failed_count,
+        elapsed,
     )
     return scored
 
@@ -254,31 +262,44 @@ def parse_args():
         description="Two-stage quality subsampling of the cleaned Alpaca dataset."
     )
     parser.add_argument(
-        "--input", type=str, default=str(INPUT_PATH),
+        "--input",
+        type=str,
+        default=str(INPUT_PATH),
         help=f"Input JSONL path (default: {INPUT_PATH})",
     )
     parser.add_argument(
-        "--output", type=str, default=str(OUTPUT_PATH),
+        "--output",
+        type=str,
+        default=str(OUTPUT_PATH),
         help=f"Output JSONL path (default: {OUTPUT_PATH})",
     )
     parser.add_argument(
-        "--scoring-log", type=str, default=str(SCORING_LOG_PATH),
+        "--scoring-log",
+        type=str,
+        default=str(SCORING_LOG_PATH),
         help=f"Scoring log JSONL path (default: {SCORING_LOG_PATH})",
     )
     parser.add_argument(
-        "--num-examples", type=int, default=4500,
+        "--num-examples",
+        type=int,
+        default=4500,
         help="Final number of examples to select (default: 4500)",
     )
     parser.add_argument(
-        "--heuristic-top", type=int, default=10000,
+        "--heuristic-top",
+        type=int,
+        default=10000,
         help="Number of candidates to keep after heuristic pre-filter (default: 10000)",
     )
     parser.add_argument(
-        "--concurrency", type=int, default=10,
+        "--concurrency",
+        type=int,
+        default=10,
         help="Max concurrent LLM scoring calls (default: 10)",
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Run stage 1 only (no API calls), print stats and exit",
     )
     return parser.parse_args()
@@ -302,7 +323,10 @@ async def run(args):
     candidates, scoring_log = heuristic_prefilter(rows, args.heuristic_top)
 
     if args.dry_run:
-        logger.info("Dry run — skipping LLM scoring. Would score %d candidates.", len(candidates))
+        logger.info(
+            "Dry run — skipping LLM scoring. Would score %d candidates.",
+            len(candidates),
+        )
         write_scoring_log(scoring_log, args.scoring_log)
         return
 
@@ -329,7 +353,9 @@ async def run(args):
             entry["llm_naturalness"] = quality.get("naturalness")
             entry["llm_completeness"] = quality.get("completeness")
             entry["llm_total"] = llm_total
-            entry["final_status"] = "selected" if r["id"] in selected_ids else "rejected_stage2"
+            entry["final_status"] = (
+                "selected" if r["id"] in selected_ids else "rejected_stage2"
+            )
 
     # Mark stage1-rejected entries as not scored by LLM
     for entry in scoring_log:
@@ -359,7 +385,9 @@ async def run(args):
     logger.info("Selected %d examples (min LLM score: %d/15)", len(selected), cutoff)
     logger.info(
         "Output word lengths: min=%d, avg=%.0f, max=%d",
-        min(output_lengths), avg_len, max(output_lengths),
+        min(output_lengths),
+        avg_len,
+        max(output_lengths),
     )
     logger.info("Written to %s", out_path)
 

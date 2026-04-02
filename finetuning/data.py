@@ -109,6 +109,10 @@ def perplexity_batch(texts: list[str], batch_size: int = 64, max_length: int = 5
         tokenizer.pad_token = tokenizer.eos_token
     device = next(model.parameters()).device
 
+    n_batches = (len(texts) + batch_size - 1) // batch_size
+    logger.info("Computing perplexity for %d texts in %d batches (batch_size=%d) on %s",
+                len(texts), n_batches, batch_size, device)
+
     all_ppls = []
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i : i + batch_size]
@@ -144,7 +148,55 @@ def perplexity_batch(texts: list[str], batch_size: int = 64, max_length: int = 5
         for loss_val in per_example_loss:
             all_ppls.append(math.exp(loss_val.item()))
 
+        if (i // batch_size + 1) % 50 == 0 or i + batch_size >= len(texts):
+            logger.info("  perplexity progress: %d/%d texts", min(i + batch_size, len(texts)), len(texts))
+
     return all_ppls
+
+
+def _ppl_to_score(ppl: float) -> float:
+    if ppl < 50:
+        return 0.35
+    elif ppl < 100:
+        return 0.25
+    elif ppl < 200:
+        return 0.15
+    elif ppl < 400:
+        return 0.05
+    return 0.0
+
+
+def _lang_to_score(nl_conf_avg: float) -> float:
+    if nl_conf_avg > 0.9:
+        return 0.30
+    elif nl_conf_avg > 0.7:
+        return 0.20
+    elif nl_conf_avg > 0.5:
+        return 0.10
+    return 0.0
+
+
+def _length_to_score(word_count: int) -> float:
+    if word_count < 10:
+        return 0.0
+    elif word_count < 20:
+        return 0.05
+    elif word_count < 30:
+        return 0.10
+    elif word_count <= 150:
+        return 0.20
+    elif word_count <= 250:
+        return 0.15
+    return 0.05
+
+
+def _completeness_to_score(output: str) -> float:
+    stripped = output.rstrip()
+    if stripped and stripped[-1] in ".!?\"')":
+        return 0.15
+    elif stripped and stripped[-1] in ":;,":
+        return 0.05
+    return 0.0
 
 
 def heuristic_quality_score(row: dict) -> dict:
@@ -154,57 +206,18 @@ def heuristic_quality_score(row: dict) -> dict:
     """
     output = row["output"]
     instruction = row["instruction"]
-    output_words = output.split()
-    word_count = len(output_words)
+    word_count = len(output.split())
 
-    # --- 1. Dutch language confidence via fastText (0-0.30) ---
     nl_conf_output = dutch_confidence(output)
     nl_conf_instr = dutch_confidence(instruction)
     nl_conf_avg = (nl_conf_output * 0.7) + (nl_conf_instr * 0.3)
-    if nl_conf_avg > 0.9:
-        lang_score = 0.30
-    elif nl_conf_avg > 0.7:
-        lang_score = 0.20
-    elif nl_conf_avg > 0.5:
-        lang_score = 0.10
-    else:
-        lang_score = 0.0
+    lang_score = _lang_to_score(nl_conf_avg)
 
-    # --- 2. Perplexity from Dutch GPT-2 (0-0.35) ---
     ppl = perplexity(output)
-    if ppl < 50:
-        ppl_score = 0.35
-    elif ppl < 100:
-        ppl_score = 0.25
-    elif ppl < 200:
-        ppl_score = 0.15
-    elif ppl < 400:
-        ppl_score = 0.05
-    else:
-        ppl_score = 0.0
+    ppl_score = _ppl_to_score(ppl)
 
-    # --- 3. Output length — sweet spot: 30-150 words (0-0.20) ---
-    if word_count < 10:
-        length_score = 0.0
-    elif word_count < 20:
-        length_score = 0.05
-    elif word_count < 30:
-        length_score = 0.10
-    elif word_count <= 150:
-        length_score = 0.20
-    elif word_count <= 250:
-        length_score = 0.15
-    else:
-        length_score = 0.05
-
-    # --- 4. Completeness — ends with proper punctuation (0-0.15) ---
-    stripped = output.rstrip()
-    if stripped and stripped[-1] in ".!?\"')":
-        completeness_score = 0.15
-    elif stripped and stripped[-1] in ":;,":
-        completeness_score = 0.05
-    else:
-        completeness_score = 0.0
+    length_score = _length_to_score(word_count)
+    completeness_score = _completeness_to_score(output)
 
     total = lang_score + ppl_score + length_score + completeness_score
 
@@ -220,3 +233,46 @@ def heuristic_quality_score(row: dict) -> dict:
         "length_score": length_score,
         "completeness_score": completeness_score,
     }
+
+
+def heuristic_quality_score_batch(
+    rows: list[dict], batch_size: int = 64
+) -> list[dict]:
+    """Score rows in bulk. Batches perplexity on GPU; fastText runs on CPU per-row.
+
+    Returns a list of score dicts (same format as heuristic_quality_score).
+    """
+    # 1. fastText language confidence (CPU, very fast — already batch-like)
+    nl_conf_outputs = [dutch_confidence(r["output"]) for r in rows]
+    nl_conf_instrs = [dutch_confidence(r["instruction"]) for r in rows]
+
+    # 2. Batch perplexity on GPU
+    output_texts = [r["output"] for r in rows]
+    ppls = perplexity_batch(output_texts, batch_size=batch_size)
+
+    # 3. Combine scores
+    results = []
+    for i, row in enumerate(rows):
+        word_count = len(row["output"].split())
+        nl_conf_avg = (nl_conf_outputs[i] * 0.7) + (nl_conf_instrs[i] * 0.3)
+        lang_score = _lang_to_score(nl_conf_avg)
+        ppl_score = _ppl_to_score(ppls[i])
+        length_score = _length_to_score(word_count)
+        completeness_score = _completeness_to_score(row["output"])
+
+        total = lang_score + ppl_score + length_score + completeness_score
+
+        results.append({
+            "total": round(total, 2),
+            "nl_confidence_output": round(nl_conf_outputs[i], 3),
+            "nl_confidence_instruction": round(nl_conf_instrs[i], 3),
+            "nl_confidence_avg": round(nl_conf_avg, 3),
+            "perplexity": round(ppls[i], 1),
+            "word_count": word_count,
+            "lang_score": lang_score,
+            "ppl_score": ppl_score,
+            "length_score": length_score,
+            "completeness_score": completeness_score,
+        })
+
+    return results

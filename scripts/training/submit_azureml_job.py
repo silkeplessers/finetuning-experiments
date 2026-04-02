@@ -33,12 +33,22 @@ def build_ml_client(azure_cfg: dict) -> MLClient:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Submit QLoRA fine-tuning job to Azure ML")
-    parser.add_argument("--config", default="configs/qlora_config.json", help="Path to qlora config JSON")
+    parser = argparse.ArgumentParser(
+        description="Submit QLoRA fine-tuning job to Azure ML"
+    )
+    parser.add_argument(
+        "--config",
+        default="configs/qlora_config.json",
+        help="Path to qlora config JSON",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config).resolve()
-    repo_root = config_path.parent.parent.resolve() if config_path.parent.name == "configs" else Path.cwd().resolve()
+    repo_root = (
+        config_path.parent.parent.resolve()
+        if config_path.parent.name == "configs"
+        else Path.cwd().resolve()
+    )
 
     load_dotenv(repo_root / ".env", override=False)
     load_dotenv(override=False)
