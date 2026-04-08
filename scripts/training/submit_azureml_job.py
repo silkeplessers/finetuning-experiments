@@ -109,7 +109,7 @@ def main() -> None:
         display_name=azure_cfg.get("display_name", "qlora-finetune"),
         description=azure_cfg.get("description", "QLoRA finetuning job"),
         instance_count=int(azure_cfg.get("instance_count", 1)),
-        timeout=int(azure_cfg.get("timeout_minutes", 1440)),
+        timeout=int(azure_cfg.get("timeout_minutes", 1440)) * 60,
         environment_variables=environment_variables,
     )
 

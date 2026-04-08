@@ -1,6 +1,7 @@
 """Run inference on the test dataset using the baseline and/or finetuned model.
 
-Results are uploaded to Azure Blob Storage.
+Results are saved to the directory specified by --output-dir. When submitted
+via Azure ML, that directory is a blob-mounted output path.
 
 Usage:
     # Baseline only
@@ -23,12 +24,13 @@ from pathlib import Path
 
 import pandas as pd
 import torch
+import json
 
 # Ensure project root is on sys.path so `finetuning` package is importable.
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 sys.path.insert(0, _PROJECT_ROOT)
 
-from finetuning.blob_storage import download_blob_directory, upload_file_to_blob
+from finetuning.blob_storage import download_blob_directory
 from finetuning.config import load_config
 from finetuning.data import load_jsonl, merge_instruction_into_input
 from finetuning.inference import run_inference
@@ -39,7 +41,6 @@ logger = logging.getLogger(__name__)
 
 STORAGE_ACCOUNT = "llmaml5615532443"
 ADAPTER_CONTAINER = "finetuning-output"
-RESULTS_CONTAINER = "inference-results"
 
 
 def parse_args() -> argparse.Namespace:
@@ -85,16 +86,16 @@ def parse_args() -> argparse.Namespace:
         help="Azure storage account name",
     )
     parser.add_argument(
-        "--results-container",
-        type=str,
-        default=RESULTS_CONTAINER,
-        help="Blob container for inference results",
-    )
-    parser.add_argument(
         "--adapter-container",
         type=str,
         default=ADAPTER_CONTAINER,
         help="Blob container with LoRA adapters",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Directory to save inference results (default: from config training.output_dir)",
     )
     return parser.parse_args()
 
@@ -105,36 +106,23 @@ def prepare_test_data(path: str) -> pd.DataFrame:
     df = merge_instruction_into_input(df)
     return df
 
-
-def save_and_upload_results(
-    df: pd.DataFrame,
-    model_label: str,
-    storage_account: str,
-    container: str,
-) -> None:
-    """Save results to a temp file and upload to blob storage."""
-    blob_name = f"{model_label}/inference_results.jsonl"
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-        tmp_path = f.name
-        df.to_json(f, orient="records", lines=True)
-
-    try:
-        url = upload_file_to_blob(storage_account, container, blob_name, tmp_path)
-        logger.info("Results uploaded: %s", url)
-    finally:
-        os.unlink(tmp_path)
+def save_results(results: pd.DataFrame, output_dir: str, label: str) -> None:
+    """Save inference results to a JSONL file inside *output_dir*."""
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    jsonl_path = out_path / f"{label}_results.jsonl"
+    results.to_json(jsonl_path, orient="records", lines=True, force_ascii=False)
+    logger.info("Saved results to %s", jsonl_path)
 
 
 def run_baseline(
-    config: dict,
+    config: dict,   
     test_df: pd.DataFrame,
     max_new_tokens: int,
     batch_size: int,
-    storage_account: str,
-    results_container: str,
+    output_dir: str,
 ) -> None:
-    """Load the base model, run inference, and upload results."""
+    """Load the base model, run inference, and save results."""
     model_cfg = config["model"]
     logger.info("Loading base model: %s", model_cfg["name"])
 
@@ -155,7 +143,7 @@ def run_baseline(
     results["predicted_output"] = predictions
     results["model"] = "baseline"
 
-    save_and_upload_results(results, "baseline", storage_account, results_container)
+    save_results(results, output_dir, "baseline")
 
     # Free GPU memory before loading next model
     del model, tokenizer
@@ -168,11 +156,11 @@ def run_finetuned(
     test_df: pd.DataFrame,
     max_new_tokens: int,
     batch_size: int,
+    output_dir: str,
     storage_account: str,
     adapter_container: str,
-    results_container: str,
 ) -> None:
-    """Download LoRA adapters from blob, load finetuned model, run inference, upload results."""
+    """Download LoRA adapters from blob, load finetuned model, run inference, save results."""
     model_cfg = config["model"]
     run_name = config["wandb"]["run_name"]
     final_model_subdir = config["training"]["final_model_subdir"]
@@ -208,7 +196,7 @@ def run_finetuned(
     results["predicted_output"] = predictions
     results["model"] = run_name
 
-    save_and_upload_results(results, run_name, storage_account, results_container)
+    save_results(results, output_dir, run_name)
 
     del model, tokenizer
     gc.collect()
@@ -218,10 +206,12 @@ def run_finetuned(
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
+    output_dir = args.output_dir or config["training"]["output_dir"]
     test_df = prepare_test_data(args.test_data)
     if args.max_samples and args.max_samples < len(test_df):
         test_df = test_df.head(args.max_samples).reset_index(drop=True)
     logger.info("Loaded %d test examples", len(test_df))
+    logger.info("Inference results will be saved to %s", output_dir)
 
     if args.mode in ("baseline", "both"):
         logger.info("--- Running baseline inference ---")
@@ -230,8 +220,7 @@ def main() -> None:
             test_df,
             args.max_new_tokens,
             args.batch_size,
-            args.storage_account,
-            args.results_container,
+            output_dir,
         )
 
     if args.mode in ("finetuned", "both"):
@@ -241,9 +230,9 @@ def main() -> None:
             test_df,
             args.max_new_tokens,
             args.batch_size,
+            output_dir,
             args.storage_account,
             args.adapter_container,
-            args.results_container,
         )
 
     logger.info("Done.")
