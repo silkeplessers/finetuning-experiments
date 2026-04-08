@@ -33,12 +33,22 @@ def build_ml_client(azure_cfg: dict) -> MLClient:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Submit QLoRA fine-tuning job to Azure ML")
-    parser.add_argument("--config", default="configs/qlora_config.json", help="Path to qlora config JSON")
+    parser = argparse.ArgumentParser(
+        description="Submit QLoRA fine-tuning job to Azure ML"
+    )
+    parser.add_argument(
+        "--config",
+        default="configs/qlora_config.json",
+        help="Path to qlora config JSON",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config).resolve()
-    repo_root = config_path.parent.parent.resolve() if config_path.parent.name == "configs" else Path.cwd().resolve()
+    repo_root = (
+        config_path.parent.parent.resolve()
+        if config_path.parent.name == "configs"
+        else Path.cwd().resolve()
+    )
 
     load_dotenv(repo_root / ".env", override=False)
     load_dotenv(override=False)
@@ -56,7 +66,7 @@ def main() -> None:
     if not train_data_path.is_absolute():
         train_data_path = (repo_root / train_data_path).resolve()
 
-    code_dir = (repo_root / "scripts").resolve()
+    code_dir = (repo_root / "scripts" / "training").resolve()
     conda_file = (repo_root / "azureml" / "conda.yml").resolve()
 
     environment = Environment(
@@ -99,7 +109,7 @@ def main() -> None:
         display_name=azure_cfg.get("display_name", "qlora-finetune"),
         description=azure_cfg.get("description", "QLoRA finetuning job"),
         instance_count=int(azure_cfg.get("instance_count", 1)),
-        timeout=int(azure_cfg.get("timeout_minutes", 1440)),
+        timeout=int(azure_cfg.get("timeout_minutes", 1440)) * 60,
         environment_variables=environment_variables,
     )
 

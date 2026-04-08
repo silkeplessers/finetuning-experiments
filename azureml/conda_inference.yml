@@ -1,0 +1,14 @@
+name: qlora-inference-env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - python-dotenv==1.2.1
+      - unsloth==2026.2.1
+      - pandas==3.0.1
+      - datasets==4.3.0
+      - tqdm
+      - azure-identity>=1.15.0
+      - azure-storage-blob>=12.19.0

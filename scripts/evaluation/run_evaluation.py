@@ -5,7 +5,7 @@ Assesses:
   2. Instruction following    (faithfulness to expected output)
 
 Usage:
-    python scripts/run_evaluation.py \
+    python scripts/evaluation/run_evaluation.py \
         --config configs/qlora_config.json \
         --model-label baseline \
         --azure-endpoint https://finetuning-foundry.openai.azure.com \
@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pandas as pd
 
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 sys.path.insert(0, _PROJECT_ROOT)
 
 from finetuning.blob_storage import download_blob_directory, upload_file_to_blob
@@ -72,13 +72,15 @@ Reply with ONLY a JSON object (no markdown fences):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def build_judge_client(azure_endpoint: str):
     """Create an Azure OpenAI client using Entra ID (DefaultAzureCredential)."""
     from azure.identity import DefaultAzureCredential, get_bearer_token_provider
     from openai import AzureOpenAI
 
     token_provider = get_bearer_token_provider(
-        DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default",
+        DefaultAzureCredential(),
+        "https://cognitiveservices.azure.com/.default",
     )
     return AzureOpenAI(
         azure_endpoint=azure_endpoint,
@@ -94,7 +96,7 @@ def _parse_judge_response(text: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    match = re.search(r'\{[^}]+\}', text, re.DOTALL)
+    match = re.search(r"\{[^}]+\}", text, re.DOTALL)
     if match:
         try:
             return json.loads(match.group())
@@ -109,7 +111,9 @@ def _parse_judge_response(text: str) -> dict:
     }
 
 
-def evaluate_row(client, model: str, prompt: str, expected: str, response_text: str) -> dict:
+def evaluate_row(
+    client, model: str, prompt: str, expected: str, response_text: str
+) -> dict:
     """Single combined judge call that scores both criteria at once."""
     user_msg = (
         f"Prompt:\n{prompt}\n\n"
@@ -129,6 +133,7 @@ def evaluate_row(client, model: str, prompt: str, expected: str, response_text: 
 
 # ── Main logic ────────────────────────────────────────────────────────────────
 
+
 def load_inference_results(
     model_label: str,
     storage_account: str,
@@ -141,13 +146,17 @@ def load_inference_results(
 
     blob_prefix = f"{model_label}/inference_results.jsonl"
     with tempfile.TemporaryDirectory() as tmp_dir:
-        download_blob_directory(storage_account, results_container, blob_prefix, tmp_dir)
+        download_blob_directory(
+            storage_account, results_container, blob_prefix, tmp_dir
+        )
         downloaded = Path(tmp_dir) / "inference_results.jsonl"
         if not downloaded.exists():
             # Blob might have been downloaded flat (prefix = full blob name)
             candidates = list(Path(tmp_dir).rglob("*.jsonl"))
             if not candidates:
-                raise FileNotFoundError(f"No JSONL found after downloading {blob_prefix}")
+                raise FileNotFoundError(
+                    f"No JSONL found after downloading {blob_prefix}"
+                )
             downloaded = candidates[0]
         return pd.read_json(downloaded, lines=True)
 
@@ -163,14 +172,17 @@ def run_evaluation(
 
     def _eval_row(idx: int, row):
         result = evaluate_row(
-            client, judge_model, row["input"], row["expected_output"], row["predicted_output"],
+            client,
+            judge_model,
+            row["input"],
+            row["expected_output"],
+            row["predicted_output"],
         )
         return idx, result
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(_eval_row, idx, row): idx
-            for idx, row in df.iterrows()
+            executor.submit(_eval_row, idx, row): idx for idx, row in df.iterrows()
         }
         done = 0
         total = len(futures)
@@ -183,9 +195,15 @@ def run_evaluation(
 
     df = df.copy()
     df["dutch_quality_score"] = [r.get("dutch_quality_score") for r in results]
-    df["dutch_quality_justification"] = [r.get("dutch_quality_justification", "") for r in results]
-    df["instruction_following_score"] = [r.get("instruction_following_score") for r in results]
-    df["instruction_following_justification"] = [r.get("instruction_following_justification", "") for r in results]
+    df["dutch_quality_justification"] = [
+        r.get("dutch_quality_justification", "") for r in results
+    ]
+    df["instruction_following_score"] = [
+        r.get("instruction_following_score") for r in results
+    ]
+    df["instruction_following_justification"] = [
+        r.get("instruction_following_justification", "") for r in results
+    ]
     return df
 
 
@@ -194,25 +212,52 @@ def print_summary(df: pd.DataFrame, model_label: str) -> None:
     inf_mean = df["instruction_following_score"].dropna().mean()
     logger.info(
         "=== %s === Dutch quality: %.2f | Instruction following: %.2f  (n=%d)",
-        model_label, dq_mean, inf_mean, len(df),
+        model_label,
+        dq_mean,
+        inf_mean,
+        len(df),
     )
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate inference results with an AI judge")
-    parser.add_argument("--config", type=str, required=True, help="Path to qlora_config.json")
+    parser = argparse.ArgumentParser(
+        description="Evaluate inference results with an AI judge"
+    )
     parser.add_argument(
-        "--model-label", type=str, required=True,
+        "--config", type=str, required=True, help="Path to qlora_config.json"
+    )
+    parser.add_argument(
+        "--model-label",
+        type=str,
+        required=True,
         help="Model label to evaluate (e.g. 'baseline' or the wandb run_name)",
     )
-    parser.add_argument("--azure-endpoint", type=str, required=True, help="Azure OpenAI endpoint URL")
-    parser.add_argument("--judge-model", type=str, default="grok-4-fast-reasoning", help="Deployment name of the judge model")
-    parser.add_argument("--local-results", type=str, default=None, help="Optional local JSONL file instead of downloading from blob")
+    parser.add_argument(
+        "--azure-endpoint", type=str, required=True, help="Azure OpenAI endpoint URL"
+    )
+    parser.add_argument(
+        "--judge-model",
+        type=str,
+        default="grok-4-fast-reasoning",
+        help="Deployment name of the judge model",
+    )
+    parser.add_argument(
+        "--local-results",
+        type=str,
+        default=None,
+        help="Optional local JSONL file instead of downloading from blob",
+    )
     parser.add_argument("--storage-account", type=str, default=STORAGE_ACCOUNT)
     parser.add_argument("--results-container", type=str, default=RESULTS_CONTAINER)
-    parser.add_argument("--max-workers", type=int, default=4, help="Number of concurrent judge API calls (default: 4)")
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="Number of concurrent judge API calls (default: 4)",
+    )
     return parser.parse_args()
 
 
@@ -223,7 +268,10 @@ def main() -> None:
     # Load inference results
     logger.info("Loading inference results for model: %s", args.model_label)
     df = load_inference_results(
-        args.model_label, args.storage_account, args.results_container, args.local_results,
+        args.model_label,
+        args.storage_account,
+        args.results_container,
+        args.local_results,
     )
     logger.info("Loaded %d inference results", len(df))
 
@@ -243,7 +291,9 @@ def main() -> None:
         eval_df.to_json(f, orient="records", lines=True)
 
     try:
-        url = upload_file_to_blob(args.storage_account, args.results_container, blob_name, tmp_path)
+        url = upload_file_to_blob(
+            args.storage_account, args.results_container, blob_name, tmp_path
+        )
         logger.info("Evaluation results uploaded: %s", url)
     finally:
         os.unlink(tmp_path)
