@@ -1,5 +1,5 @@
 SYSTEM_PROMPT = (
-    "Beantwoord de volgende vraag zo goed mogelijk. "
+    "Beantwoord de volgende vraag zo goed mogelijk in het Nederlands. "
     "Soms wordt er extra input meegegeven die je moet gebruiken bij het beantwoorden."
 )
 
