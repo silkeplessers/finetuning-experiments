@@ -68,7 +68,7 @@ def main() -> None:
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=2048,
+        default=1024,
         help="Max tokens to generate per example",
     )
     parser.add_argument(
@@ -104,15 +104,15 @@ def main() -> None:
 
     # The inference script needs the finetuning package, so code_dir is repo root.
     code_dir = repo_root.resolve()
-    conda_file = (repo_root / "azureml" / "conda_inference.yml").resolve()
+    conda_file = (repo_root / "azureml" / "conda.yml").resolve()
 
     environment = Environment(
-        name=azure_cfg.get("inference_environment_name", "qlora-inference-env"),
+        name=azure_cfg.get("inference_environment_name", "unsloth-inference-env"),
         version=azure_cfg.get("inference_environment_version", "1"),
         image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu22.04:latest",
         conda_file=str(conda_file),
     )
-
+    print(environment)
     output_uri = azure_cfg.get(
         "inference_results_uri",
         "azureml://datastores/workspaceblobstore/paths/inference-results/",
@@ -148,7 +148,7 @@ def main() -> None:
         },
         environment=environment,
         compute=azure_cfg["compute"],
-        experiment_name=azure_cfg.get("experiment_name", "dutch-mistral-qlora"),
+        experiment_name=azure_cfg.get("experiment_name", "dutch-mistral-qlora-inference"),
         display_name=display_name,
         description=f"Inference job ({args.mode}) for {run_name}",
         instance_count=1,

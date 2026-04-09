@@ -1,7 +1,7 @@
 {
   "model": {
     "name": "unsloth/mistral-7b-instruct-v0.3-bnb-4bit",
-    "max_seq_length": 2048,
+    "max_seq_length": 1024,
     "load_in_4bit": true
   },
   "data": {
@@ -33,8 +33,8 @@
       "dataset_text_field": "text",
       "per_device_train_batch_size": 2,
       "gradient_accumulation_steps": 8,
-      "warmup_steps": 300,
-      "max_length": 2048,
+      "warmup_steps": 30,
+      "max_length": 1024,
       "num_train_epochs": 1,
       "learning_rate": 0.0002,
       "logging_steps": 1,
@@ -52,7 +52,7 @@
   "wandb": {
     "enabled": true,
     "project": "dutch-mistral",
-    "run_name": "mistral_r16_a16_e1_b16"
+    "run_name": "mistral_r16_a16_e1_b16_w30"
   },
   "azureml": {
     "experiment_name": "dutch-mistral-qlora",
@@ -63,6 +63,8 @@
     "inference_results_uri": "azureml://datastores/workspaceblobstore/paths/inference-results/",
     "environment_name": "qlora-unsloth-env",
     "environment_version": "2",
+    "inference_environment_name": "unsloth-inference-env",
+    "inference_environment_version": "1",
     "instance_count": 1,
     "timeout_minutes": 1440,
     "stream_logs": true
