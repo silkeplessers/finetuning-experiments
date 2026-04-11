@@ -1,0 +1,7 @@
+{
+    "files.exclude": {
+        "**/wandb": true,
+        "**/unsloth_compiled_cache": true,
+        "**/__pycache__": true
+    }
+}

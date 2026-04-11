@@ -38,6 +38,7 @@ def run_inference(
                 max_new_tokens=max_new_tokens,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
+                temperature=0.1,
                 use_cache=True,
             )
 

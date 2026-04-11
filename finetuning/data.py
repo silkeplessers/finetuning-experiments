@@ -35,8 +35,10 @@ def split_train_test(
     train_frac: float = 0.8,
     random_state: int = 42,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    train = data.sample(frac=train_frac, random_state=random_state).reset_index(drop=True)
-    test = data.drop(train.index).reset_index(drop=True)
+    train = data.sample(frac=train_frac, random_state=random_state)
+    test = data.drop(train.index)
+    train = train.reset_index(drop=True)
+    test = test.reset_index(drop=True)
     return train, test
 
 
