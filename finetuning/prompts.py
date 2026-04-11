@@ -1,4 +1,4 @@
-SYSTEM_PROMPT = "Beantwoord de volgende vraag zo goed mogelijk in het Nederlands."
+SYSTEM_PROMPT = "Je bent een behulpzame assistent. Antwoord altijd in het Nederlands. Wees beknopt en relevant."
 
 
 def _build_user_content(user_input: str) -> str:
