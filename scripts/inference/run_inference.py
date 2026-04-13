@@ -70,8 +70,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=8,
-        help="Batch size for inference (default: 8)",
+        default=16,
+        help="Batch size for inference (default: 16)",
     )
     parser.add_argument(
         "--max-samples",
@@ -115,6 +115,13 @@ def save_results(results: pd.DataFrame, output_dir: str, label: str) -> None:
     logger.info("Saved results to %s", jsonl_path)
 
 
+BASELINE_SYSTEM_PROMPT = (
+    "Je bent een behulpzame assistent. "
+    "Beantwoord de volgende vraag volledig in het Nederlands. "
+    "Wees beknopt en relevant."
+)
+
+
 def run_baseline(
     config: dict,   
     test_df: pd.DataFrame,
@@ -133,7 +140,10 @@ def run_baseline(
     )
 
     predictions = run_inference(
-        model, tokenizer, test_df["prompt"].tolist(), max_new_tokens, batch_size
+        model, tokenizer, test_df["prompt"].tolist(), max_new_tokens,
+        batch_size=batch_size,
+        system_prompt=BASELINE_SYSTEM_PROMPT,
+        max_seq_length=model_cfg["max_seq_length"],
     )
 
     results = test_df[["prompt", "output"]].copy()

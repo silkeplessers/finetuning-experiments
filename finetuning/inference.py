@@ -16,6 +16,8 @@ def run_inference(
     max_new_tokens: int = 512,
     batch_size: int = 8,
     repetition_penalty: float = 1.15,
+    system_prompt: str | None = None,
+    max_seq_length: int = 2048,
 ) -> list[str]:
     """Run batched inference on a list of input texts and return generated answers."""
     FastLanguageModel.for_inference(model)
@@ -24,13 +26,32 @@ def run_inference(
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
-    prompts = [build_inference_prompt(tokenizer, text) for text in inputs]
-    predictions = []
+    prompts = [build_inference_prompt(tokenizer, text, system_prompt=system_prompt) for text in inputs]
+    max_input_length = max_seq_length - max_new_tokens
 
-    for i in tqdm(range(0, len(prompts), batch_size), desc="Running inference"):
-        batch_prompts = prompts[i : i + batch_size]
+    # Warn on any prompts that will be truncated
+    for idx, prompt in enumerate(prompts):
+        full_len = len(tokenizer.encode(prompt, add_special_tokens=True))
+        if full_len > max_input_length:
+            logger.warning(
+                "Prompt %d will be truncated from %d to %d tokens",
+                idx, full_len, max_input_length,
+            )
+
+    # Sort by length for efficient batching (less padding waste)
+    sorted_indices = sorted(range(len(prompts)), key=lambda k: len(prompts[k]))
+    sorted_prompts = [prompts[k] for k in sorted_indices]
+    sorted_predictions: list[str | None] = [None] * len(prompts)
+
+    for i in tqdm(range(0, len(sorted_prompts), batch_size), desc="Running inference"):
+        batch_indices = sorted_indices[i : i + batch_size]
+        batch_prompts = sorted_prompts[i : i + batch_size]
         tokens = tokenizer(
-            batch_prompts, return_tensors="pt", padding=True, truncation=True,
+            batch_prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=max_input_length,
         ).to("cuda")
 
         with torch.no_grad():
@@ -44,9 +65,9 @@ def run_inference(
             )
 
         input_len = tokens["input_ids"].shape[-1]
-        for output in outputs:
+        for j, output in enumerate(outputs):
             generated = output[input_len:]
             answer = tokenizer.decode(generated, skip_special_tokens=True).strip()
-            predictions.append(answer)
+            sorted_predictions[batch_indices[j]] = answer
 
-    return predictions
+    return sorted_predictions

@@ -62,9 +62,9 @@
     "output_uri": "azureml://datastores/workspaceblobstore/paths/finetuning-output/",
     "inference_results_uri": "azureml://datastores/workspaceblobstore/paths/inference-results/",
     "environment_name": "qlora-unsloth-env",
-    "environment_version": "2",
+    "environment_version": "3",
     "inference_environment_name": "qlora-inference-env",
-    "inference_environment_version": "1",
+    "inference_environment_version": "2",
     "instance_count": 1,
     "timeout_minutes": 1440,
     "stream_logs": true
