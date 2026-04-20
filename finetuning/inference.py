@@ -15,7 +15,6 @@ def run_inference(
     inputs: list[str],
     max_new_tokens: int = 512,
     batch_size: int = 8,
-    repetition_penalty: float = 1.15,
     system_prompt: str | None = None,
     max_seq_length: int = 2048,
 ) -> list[str]:
@@ -60,7 +59,6 @@ def run_inference(
                 max_new_tokens=max_new_tokens,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
-                repetition_penalty=repetition_penalty,
                 use_cache=True,
             )
 

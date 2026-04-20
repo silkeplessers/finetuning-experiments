@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 STORAGE_ACCOUNT = "llmaml5615532443"
-ADAPTER_CONTAINER = "finetuning-output"
+ADAPTER_CONTAINER = "azureml-blobstore-4c704101-7a51-4680-bcf8-f13966bf69b4"
 
 
 def parse_args() -> argparse.Namespace:
@@ -169,12 +169,23 @@ def run_finetuned(
     output_dir: str,
     storage_account: str,
     adapter_container: str,
+    managed_identity_client_id: str | None = None,
 ) -> None:
     """Download LoRA adapters from blob, load finetuned model, run inference, save results."""
     model_cfg = config["model"]
     run_name = config["wandb"]["run_name"]
     final_model_subdir = config["training"]["final_model_subdir"]
-    blob_prefix = f"{run_name}/{final_model_subdir}/"
+
+    # Extract the blob path prefix from the output_uri (e.g. "finetuning-output")
+    output_uri = config.get("azureml", {}).get(
+        "output_uri",
+        "azureml://datastores/workspaceblobstore/paths/finetuning-output/",
+    )
+    blob_path_prefix = ""
+    if "/paths/" in output_uri:
+        blob_path_prefix = output_uri.split("/paths/", 1)[1].strip("/")
+
+    blob_prefix = f"{blob_path_prefix}/{run_name}/{final_model_subdir}/" if blob_path_prefix else f"{run_name}/{final_model_subdir}/"
 
     logger.info(
         "Downloading LoRA adapters from %s/%s ...", adapter_container, blob_prefix
@@ -186,6 +197,7 @@ def run_finetuned(
             adapter_container,
             blob_prefix,
             tmp_dir,
+            managed_identity_client_id=managed_identity_client_id,
         )
 
         logger.info("Loading finetuned model from adapter: %s", adapter_local)
@@ -243,6 +255,7 @@ def main() -> None:
             output_dir,
             args.storage_account,
             args.adapter_container,
+            managed_identity_client_id=config.get("azureml", {}).get("managed_identity_client_id"),
         )
 
     logger.info("Done.")

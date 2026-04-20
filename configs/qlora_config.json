@@ -57,6 +57,7 @@
   "azureml": {
     "experiment_name": "dutch-mistral-qlora",
     "compute": "gpu-cluster",
+    "managed_identity_client_id": "62518eb4-a559-4f9c-9a85-7fb9793e5859",
     "display_name": "qlora-finetune",
     "description": "QLoRA finetuning job",
     "output_uri": "azureml://datastores/workspaceblobstore/paths/finetuning-output/",

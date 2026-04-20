@@ -1,222 +1,62 @@
 """Evaluate inference results using Azure AI Foundry judge LLMs.
 
-Assesses:
-  1. Dutch language quality  (grammar, fluency, vocabulary)
-  2. Instruction following    (faithfulness to expected output)
+Both JUDGE_LLM_1 and JUDGE_LLM_2 score every row independently (2 API calls
+per row per judge for absolute scoring, 1 per row per judge for pairwise).
+Results are stored with j1_/j2_ prefixes and aggregated per judge plus combined
+with inter-judge agreement (Cohen's Kappa).
+
+Baseline row-level scores are cached in blob storage and reused across
+experiments. Only pairwise comparison is re-run each time.
+
+Endpoint and judge model deployments are read from .env:
+    ENDPOINT, JUDGE_LLM_1, JUDGE_LLM_2
 
 Usage:
     python scripts/evaluation/run_evaluation.py \
         --config configs/qlora_config.json \
-        --model-label baseline \
-        --azure-endpoint https://finetuning-foundry.openai.azure.com \
-        --judge-model grok-4-fast-reasoning
+        --model-label baseline
 
-    # Or evaluate the finetuned run:
-    python scripts/run_evaluation.py \
+    python scripts/evaluation/run_evaluation.py \
         --config configs/qlora_config.json \
-        --model-label run_r16_a16_e1_b16-TEST \
-        --azure-endpoint https://finetuning-foundry.openai.azure.com \
-        --judge-model grok-4-fast-reasoning
+        --model-label mistral_r16_a16_e1_b16_w30
 """
 
 import argparse
-import json
 import logging
 import os
-import re
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-import pandas as pd
+from dotenv import load_dotenv
 
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
-sys.path.insert(0, _PROJECT_ROOT)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
+load_dotenv(_PROJECT_ROOT / ".env")
 
-from finetuning.blob_storage import download_blob_directory, upload_file_to_blob
 from finetuning.config import load_config
+from finetuning.evaluation import (
+    build_judge_client,
+    compute_aggregate,
+    load_inference_results,
+    load_row_scores,
+    log_to_mlflow,
+    print_summary,
+    run_absolute_evaluation,
+    run_pairwise_evaluation,
+    save_aggregate,
+    save_charts_to_blob,
+    save_row_scores,
+)
+from finetuning.eval_visualization import generate_charts
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 STORAGE_ACCOUNT = "llmaml5615532443"
-RESULTS_CONTAINER = "inference-results"
-
-# ── Judge system prompt (combined) ────────────────────────────────────────────
-
-JUDGE_SYSTEM = """\
-You are an expert evaluator. You will receive an original prompt (in Dutch), \
-an expected reference answer, and the model's actual response.
-
-Evaluate the response on TWO criteria:
-
-1. **Dutch language quality** (grammar, fluency, vocabulary):
-   1 - Very poor: major grammar errors, largely incomprehensible or not Dutch.
-   2 - Poor: frequent grammar mistakes, unnatural phrasing.
-   3 - Acceptable: understandable but contains noticeable errors.
-   4 - Good: mostly fluent with only minor mistakes.
-   5 - Excellent: fluent, grammatically correct, natural vocabulary.
-
-2. **Instruction following** (faithfulness to the expected output):
-   1 - Completely irrelevant or fails to address the instruction.
-   2 - Partially addresses the instruction but misses key elements.
-   3 - Addresses the instruction with notable omissions or inaccuracies.
-   4 - Follows instructions well with only minor deviations.
-   5 - Perfectly follows instructions; comprehensive and accurate.
-
-Reply with ONLY a JSON object (no markdown fences):
-{"dutch_quality_score": <int 1-5>, "dutch_quality_justification": "<one sentence>", \
-"instruction_following_score": <int 1-5>, "instruction_following_justification": "<one sentence>"}"""
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def build_judge_client(azure_endpoint: str):
-    """Create an Azure OpenAI client using Entra ID (DefaultAzureCredential)."""
-    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-    from openai import AzureOpenAI
-
-    token_provider = get_bearer_token_provider(
-        DefaultAzureCredential(),
-        "https://cognitiveservices.azure.com/.default",
-    )
-    return AzureOpenAI(
-        azure_endpoint=azure_endpoint,
-        azure_ad_token_provider=token_provider,
-        api_version="2025-01-01-preview",
-    )
-
-
-def _parse_judge_response(text: str) -> dict:
-    """Best-effort extraction of the combined judge JSON from LLM output."""
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    match = re.search(r"\{[^}]+\}", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    return {
-        "dutch_quality_score": None,
-        "dutch_quality_justification": text.strip(),
-        "instruction_following_score": None,
-        "instruction_following_justification": text.strip(),
-    }
-
-
-def evaluate_row(
-    client, model: str, prompt: str, expected: str, response_text: str
-) -> dict:
-    """Single combined judge call that scores both criteria at once."""
-    user_msg = (
-        f"Prompt:\n{prompt}\n\n"
-        f"Expected response:\n{expected}\n\n"
-        f"Model response:\n{response_text}"
-    )
-    response = client.chat.completions.create(
-        model=model,
-        temperature=0,
-        messages=[
-            {"role": "system", "content": JUDGE_SYSTEM},
-            {"role": "user", "content": user_msg},
-        ],
-    )
-    return _parse_judge_response(response.choices[0].message.content)
-
-
-# ── Main logic ────────────────────────────────────────────────────────────────
-
-
-def load_inference_results(
-    model_label: str,
-    storage_account: str,
-    results_container: str,
-    local_path: str | None = None,
-) -> pd.DataFrame:
-    """Load inference results from blob storage (or a local file override)."""
-    if local_path:
-        return pd.read_json(local_path, lines=True)
-
-    blob_prefix = f"{model_label}/inference_results.jsonl"
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        download_blob_directory(
-            storage_account, results_container, blob_prefix, tmp_dir
-        )
-        downloaded = Path(tmp_dir) / "inference_results.jsonl"
-        if not downloaded.exists():
-            # Blob might have been downloaded flat (prefix = full blob name)
-            candidates = list(Path(tmp_dir).rglob("*.jsonl"))
-            if not candidates:
-                raise FileNotFoundError(
-                    f"No JSONL found after downloading {blob_prefix}"
-                )
-            downloaded = candidates[0]
-        return pd.read_json(downloaded, lines=True)
-
-
-def run_evaluation(
-    df: pd.DataFrame,
-    client,
-    judge_model: str,
-    max_workers: int = 4,
-) -> pd.DataFrame:
-    """Run evaluation concurrently — one combined judge call per row."""
-    results = [None] * len(df)
-
-    def _eval_row(idx: int, row):
-        result = evaluate_row(
-            client,
-            judge_model,
-            row["input"],
-            row["expected_output"],
-            row["predicted_output"],
-        )
-        return idx, result
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(_eval_row, idx, row): idx for idx, row in df.iterrows()
-        }
-        done = 0
-        total = len(futures)
-        for future in as_completed(futures):
-            idx, result = future.result()
-            results[idx] = result
-            done += 1
-            if done % 10 == 0 or done == total:
-                logger.info("Evaluated %d/%d", done, total)
-
-    df = df.copy()
-    df["dutch_quality_score"] = [r.get("dutch_quality_score") for r in results]
-    df["dutch_quality_justification"] = [
-        r.get("dutch_quality_justification", "") for r in results
-    ]
-    df["instruction_following_score"] = [
-        r.get("instruction_following_score") for r in results
-    ]
-    df["instruction_following_justification"] = [
-        r.get("instruction_following_justification", "") for r in results
-    ]
-    return df
-
-
-def print_summary(df: pd.DataFrame, model_label: str) -> None:
-    dq_mean = df["dutch_quality_score"].dropna().mean()
-    inf_mean = df["instruction_following_score"].dropna().mean()
-    logger.info(
-        "=== %s === Dutch quality: %.2f | Instruction following: %.2f  (n=%d)",
-        model_label,
-        dq_mean,
-        inf_mean,
-        len(df),
-    )
+INFERENCE_CONTAINER = "inference-results"
+EVAL_CONTAINER = "azureml-blobstore-4c704101-7a51-4680-bcf8-f13966bf69b4"
+EVAL_BLOB_PREFIX = "eval-results"
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -224,7 +64,7 @@ def print_summary(df: pd.DataFrame, model_label: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Evaluate inference results with an AI judge"
+        description="Evaluate inference results with AI judges"
     )
     parser.add_argument(
         "--config", type=str, required=True, help="Path to qlora_config.json"
@@ -236,67 +76,124 @@ def parse_args() -> argparse.Namespace:
         help="Model label to evaluate (e.g. 'baseline' or the wandb run_name)",
     )
     parser.add_argument(
-        "--azure-endpoint", type=str, required=True, help="Azure OpenAI endpoint URL"
-    )
-    parser.add_argument(
-        "--judge-model",
-        type=str,
-        default="grok-4-fast-reasoning",
-        help="Deployment name of the judge model",
-    )
-    parser.add_argument(
         "--local-results",
         type=str,
         default=None,
         help="Optional local JSONL file instead of downloading from blob",
     )
     parser.add_argument("--storage-account", type=str, default=STORAGE_ACCOUNT)
-    parser.add_argument("--results-container", type=str, default=RESULTS_CONTAINER)
+    parser.add_argument("--inference-container", type=str, default=INFERENCE_CONTAINER)
     parser.add_argument(
         "--max-workers",
         type=int,
         default=4,
         help="Number of concurrent judge API calls (default: 4)",
     )
+    parser.add_argument(
+        "--skip-mlflow",
+        action="store_true",
+        help="Skip logging to MLflow",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    _ = load_config(args.config)  # validate config exists
+    config = load_config(args.config)
+
+    azure_endpoint = os.environ["ENDPOINT"]
+    judge_llm_1 = os.environ["JUDGE_LLM_1"]
+    judge_llm_2 = os.environ["JUDGE_LLM_2"]
+    experiment_name = config["wandb"]["project"]
+    is_baseline = args.model_label == "baseline"
+
+    storage = args.storage_account
+    eval_container = EVAL_CONTAINER
+    eval_prefix = f"{EVAL_BLOB_PREFIX}/{args.model_label}"
+    baseline_prefix = f"{EVAL_BLOB_PREFIX}/baseline"
 
     # Load inference results
     logger.info("Loading inference results for model: %s", args.model_label)
     df = load_inference_results(
         args.model_label,
-        args.storage_account,
-        args.results_container,
+        storage,
+        args.inference_container,
         args.local_results,
     )
     logger.info("Loaded %d inference results", len(df))
 
-    # Build judge client
-    client = build_judge_client(args.azure_endpoint)
+    client = build_judge_client(azure_endpoint)
+    judges = [("j1", judge_llm_1), ("j2", judge_llm_2)]
+    logger.info("Judge 1: %s | Judge 2: %s", judge_llm_1, judge_llm_2)
 
-    # Run evaluation
-    eval_df = run_evaluation(df, client, args.judge_model, args.max_workers)
+    # ── Absolute scoring (both judges) ────────────────────────────────────
+    # For baseline: reuse cached scores if they exist in blob
+    df_scores = load_row_scores(storage, eval_container, eval_prefix) if is_baseline else None
 
-    # Print summary
-    print_summary(eval_df, args.model_label)
+    if df_scores is None:
+        df_scores = df.copy()
+        for judge_label, judge_model in judges:
+            logger.info("Running absolute evaluation [%s=%s] for %s ...", judge_label, judge_model, args.model_label)
+            df_scores = run_absolute_evaluation(
+                df_scores, client, judge_model, judge_label, args.max_workers
+            )
+        save_row_scores(df_scores, storage, eval_container, eval_prefix)
+    else:
+        logger.info("Reusing cached row scores from blob")
 
-    # Upload evaluation results to blob
-    blob_name = f"{args.model_label}/evaluation_results.jsonl"
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-        tmp_path = f.name
-        eval_df.to_json(f, orient="records", lines=True)
+    # ── Pairwise comparison (finetuned only, both judges) ─────────────────
+    df_pairwise = None
+    df_baseline_scores = None
 
-    try:
-        url = upload_file_to_blob(
-            args.storage_account, args.results_container, blob_name, tmp_path
-        )
-        logger.info("Evaluation results uploaded: %s", url)
-    finally:
-        os.unlink(tmp_path)
+    if not is_baseline:
+        logger.info("Loading baseline inference results for pairwise comparison ...")
+        df_baseline = load_inference_results("baseline", storage, args.inference_container)
+        df_baseline_scores = load_row_scores(storage, eval_container, baseline_prefix)
+
+        if df_baseline_scores is None:
+            logger.info("Baseline row scores not cached — running baseline evaluation first ...")
+            df_baseline_scores = df_baseline.copy()
+            for judge_label, judge_model in judges:
+                logger.info("Running absolute evaluation [%s=%s] for baseline ...", judge_label, judge_model)
+                df_baseline_scores = run_absolute_evaluation(
+                    df_baseline_scores, client, judge_model, judge_label, args.max_workers
+                )
+            save_row_scores(df_baseline_scores, storage, eval_container, baseline_prefix)
+
+        # Run pairwise for each judge, merging columns into one DF
+        df_pairwise = df_baseline[["input", "expected_output"]].copy()
+        df_pairwise["baseline_output"] = df_baseline["predicted_output"].values
+        df_pairwise["finetuned_output"] = df["predicted_output"].values
+
+        for judge_label, judge_model in judges:
+            logger.info("Running pairwise evaluation [%s=%s] ...", judge_label, judge_model)
+            df_pw = run_pairwise_evaluation(
+                df_baseline, df, client, judge_model, judge_label, args.max_workers
+            )
+            # Merge judge-specific pairwise columns into the combined DF
+            for col in df_pw.columns:
+                if col.startswith(judge_label):
+                    df_pairwise[col] = df_pw[col].values
+
+        save_row_scores(df_pairwise, storage, eval_container, eval_prefix, "pairwise.jsonl")
+
+    # ── Aggregate metrics ─────────────────────────────────────────────────
+    agg = compute_aggregate(df_scores, args.model_label, df_pairwise, df_baseline_scores)
+    save_aggregate(agg, storage, eval_container, eval_prefix)
+    print_summary(agg)
+
+    # ── Charts ────────────────────────────────────────────────────────────
+    with tempfile.TemporaryDirectory() as charts_dir:
+        charts_path = Path(charts_dir)
+        generate_charts(agg, df_scores, charts_path, df_baseline_scores, df_pairwise)
+        save_charts_to_blob(charts_path, storage, eval_container, eval_prefix)
+
+    # ── MLflow ────────────────────────────────────────────────────────────
+    if not args.skip_mlflow:
+        log_to_mlflow(agg, args.model_label, experiment_name, storage, eval_container, eval_prefix)
+        logger.info("Logged to MLflow experiment: %s", experiment_name)
+
+    logger.info("Evaluation complete. Results in blob: %s/%s", eval_container, eval_prefix)
 
 
 if __name__ == "__main__":
