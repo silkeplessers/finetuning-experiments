@@ -46,9 +46,7 @@ def build_ml_client(azure_cfg: dict) -> MLClient:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Submit inference job to Azure ML"
-    )
+    parser = argparse.ArgumentParser(description="Submit inference job to Azure ML")
     parser.add_argument(
         "--config",
         default="configs/qlora_config.json",
@@ -118,7 +116,7 @@ def main() -> None:
         "inference_results_uri",
         "azureml://datastores/workspaceblobstore/paths/inference-results/",
     )
-    
+
     # Build the command string
     cmd_parts = [
         "python scripts/inference/run_inference.py",
@@ -143,13 +141,13 @@ def main() -> None:
             "test_data": Input(type="uri_file", path=str(test_data_path)),
         },
         outputs={
-            "model_output": Output(
-                type="uri_folder", mode="rw_mount", path=output_uri
-            ),
+            "model_output": Output(type="uri_folder", mode="rw_mount", path=output_uri),
         },
         environment=environment,
         compute=azure_cfg["compute"],
-        experiment_name=azure_cfg.get("experiment_name", "dutch-mistral-qlora-inference"),
+        experiment_name=azure_cfg.get(
+            "experiment_name", "dutch-mistral-qlora-inference"
+        ),
         display_name=display_name,
         description=f"Inference job ({args.mode}) for {run_name}",
         instance_count=1,

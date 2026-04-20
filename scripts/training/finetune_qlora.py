@@ -150,7 +150,7 @@ def main() -> None:
         processing_class=tokenizer,
         train_dataset=formatted_dataset,
         # dataset_text_field="text",
-        #max_seq_length=model_cfg["max_seq_length"],
+        # max_seq_length=model_cfg["max_seq_length"],
         # packing=sft_config.packing,
         args=sft_config,
     )

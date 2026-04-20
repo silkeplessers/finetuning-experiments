@@ -41,7 +41,12 @@ from finetuning.schemas import (
 
 logger = logging.getLogger(__name__)
 
-SCORE_COLS = ["grammar_score", "fluency_score", "vocabulary_score", "instruction_following_score"]
+SCORE_COLS = [
+    "grammar_score",
+    "fluency_score",
+    "vocabulary_score",
+    "instruction_following_score",
+]
 
 # ── Client builder ────────────────────────────────────────────────────────────
 
@@ -71,7 +76,6 @@ def _judge_call(client, model: str, system: str, user_msg: str, response_format)
     """Single judge API call with structured output. Returns a Pydantic model instance."""
     completion = client.beta.chat.completions.parse(
         model=model,
-        temperature=0,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user_msg},
@@ -81,25 +85,41 @@ def _judge_call(client, model: str, system: str, user_msg: str, response_format)
     return completion.choices[0].message.parsed
 
 
-def evaluate_dutch_quality(client, model: str, prompt: str, response_text: str) -> DutchQualityResult:
+def evaluate_dutch_quality(
+    client, model: str, prompt: str, response_text: str
+) -> DutchQualityResult:
     """Single call returning grammar, fluency, vocabulary, and language mixing."""
     user_msg = f"Prompt:\n{prompt}\n\nModel response:\n{response_text}"
-    return _judge_call(client, model, DUTCH_QUALITY_SYSTEM, user_msg, DutchQualityResult)
+    return _judge_call(
+        client, model, DUTCH_QUALITY_SYSTEM, user_msg, DutchQualityResult
+    )
 
 
-def evaluate_instruction_following(client, model: str, prompt: str, expected: str, response_text: str) -> InstructionFollowingResult:
+def evaluate_instruction_following(
+    client, model: str, prompt: str, expected: str, response_text: str
+) -> InstructionFollowingResult:
     user_msg = (
         f"Prompt:\n{prompt}\n\n"
         f"Expected response:\n{expected}\n\n"
         f"Model response:\n{response_text}"
     )
-    return _judge_call(client, model, INSTRUCTION_FOLLOWING_SYSTEM, user_msg, InstructionFollowingResult)
+    return _judge_call(
+        client,
+        model,
+        INSTRUCTION_FOLLOWING_SYSTEM,
+        user_msg,
+        InstructionFollowingResult,
+    )
 
 
-def evaluate_row(client, model: str, prompt: str, expected: str, response_text: str) -> dict:
+def evaluate_row(
+    client, model: str, prompt: str, expected: str, response_text: str
+) -> dict:
     """2 API calls: dutch_quality + instruction_following. Returns flat dict."""
     quality = evaluate_dutch_quality(client, model, prompt, response_text)
-    instruction = evaluate_instruction_following(client, model, prompt, expected, response_text)
+    instruction = evaluate_instruction_following(
+        client, model, prompt, expected, response_text
+    )
     return {**quality.model_dump(), **instruction.model_dump()}
 
 
@@ -107,7 +127,10 @@ def evaluate_row(client, model: str, prompt: str, expected: str, response_text: 
 
 
 def _build_pairwise_msg(
-    prompt: str, response_a: str, response_b: str, expected: str,
+    prompt: str,
+    response_a: str,
+    response_b: str,
+    expected: str,
 ) -> tuple[str, bool]:
     """Build pairwise user message. Returns (msg, swapped).
 
@@ -138,16 +161,24 @@ def _map_winner(raw_winner: str, swapped: bool) -> str:
 
 
 def evaluate_pairwise(
-    client, model: str, prompt: str, expected: str,
-    baseline_text: str, finetuned_text: str,
+    client,
+    model: str,
+    prompt: str,
+    expected: str,
+    baseline_text: str,
+    finetuned_text: str,
 ) -> dict:
     """Single pairwise call returning quality_winner + instruction_winner."""
-    user_msg, swapped = _build_pairwise_msg(prompt, baseline_text, finetuned_text, expected)
+    user_msg, swapped = _build_pairwise_msg(
+        prompt, baseline_text, finetuned_text, expected
+    )
     result = _judge_call(client, model, PAIRWISE_SYSTEM, user_msg, PairwiseResult)
     return {
         "pairwise_quality_winner": _map_winner(result.quality_winner.value, swapped),
         "pairwise_quality_justification": result.quality_justification,
-        "pairwise_instruction_winner": _map_winner(result.instruction_winner.value, swapped),
+        "pairwise_instruction_winner": _map_winner(
+            result.instruction_winner.value, swapped
+        ),
         "pairwise_instruction_justification": result.instruction_justification,
     }
 
@@ -158,25 +189,29 @@ def evaluate_pairwise(
 def load_inference_results(
     model_label: str,
     storage_account: str,
-    results_container: str,
+    container: str,
+    inference_prefix: str = "inference-results",
     local_path: str | None = None,
 ) -> pd.DataFrame:
-    """Load inference results from blob storage (or a local file override)."""
+    """Load inference results from blob storage (or a local file override).
+
+    Blob path: {inference_prefix}/{model_label}_results.jsonl
+    """
     if local_path:
         return pd.read_json(local_path, lines=True)
 
-    blob_prefix = f"{model_label}/inference_results.jsonl"
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        download_blob_directory(
-            storage_account, results_container, blob_prefix, tmp_dir
+    blob_name = f"{inference_prefix}/{model_label}_results.jsonl"
+    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as f:
+        tmp_path = f.name
+    found = download_blob_file(storage_account, container, blob_name, tmp_path)
+    if not found:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise FileNotFoundError(
+            f"Inference results not found: {container}/{blob_name}"
         )
-        downloaded = Path(tmp_dir) / "inference_results.jsonl"
-        if not downloaded.exists():
-            candidates = list(Path(tmp_dir).rglob("*.jsonl"))
-            if not candidates:
-                raise FileNotFoundError(f"No JSONL found after downloading {blob_prefix}")
-            downloaded = candidates[0]
-        return pd.read_json(downloaded, lines=True)
+    df = pd.read_json(tmp_path, lines=True)
+    Path(tmp_path).unlink()
+    return df
 
 
 # ── Parallel dual-judge runners ──────────────────────────────────────────────
@@ -204,7 +239,13 @@ def run_absolute_evaluation(
 
     def _eval(task):
         row_idx, row, judge_label, judge_model = task
-        result = evaluate_row(client, judge_model, row["input"], row["expected_output"], row["predicted_output"])
+        result = evaluate_row(
+            client,
+            judge_model,
+            row["input"],
+            row["expected_output"],
+            row["predicted_output"],
+        )
         return row_idx, judge_label, result
 
     # Collect results keyed by (row_idx, judge_label)
@@ -222,7 +263,9 @@ def run_absolute_evaluation(
     # Build output DataFrame
     df = df.copy()
     for jl, _ in judges:
-        keys = list(DutchQualityResult.model_fields) + list(InstructionFollowingResult.model_fields)
+        keys = list(DutchQualityResult.model_fields) + list(
+            InstructionFollowingResult.model_fields
+        )
         for key in keys:
             df[f"{jl}_{key}"] = [results[(i, jl)].get(key) for i in range(len(rows))]
     return df
@@ -248,8 +291,12 @@ def run_pairwise_evaluation(
     def _eval(task):
         pair_idx, b_row, f_row, judge_label, judge_model = task
         result = evaluate_pairwise(
-            client, judge_model, b_row["input"], b_row["expected_output"],
-            b_row["predicted_output"], f_row["predicted_output"],
+            client,
+            judge_model,
+            b_row["input"],
+            b_row["expected_output"],
+            b_row["predicted_output"],
+            f_row["predicted_output"],
         )
         return pair_idx, judge_label, result
 
@@ -269,8 +316,10 @@ def run_pairwise_evaluation(
     df["baseline_output"] = df_baseline["predicted_output"].values
     df["finetuned_output"] = df_finetuned["predicted_output"].values
     pairwise_cols = [
-        "pairwise_quality_winner", "pairwise_quality_justification",
-        "pairwise_instruction_winner", "pairwise_instruction_justification",
+        "pairwise_quality_winner",
+        "pairwise_quality_justification",
+        "pairwise_instruction_winner",
+        "pairwise_instruction_justification",
     ]
     for jl, _ in judges:
         for key in pairwise_cols:
@@ -285,7 +334,9 @@ def _agreement_rate(labels_a: list, labels_b: list) -> float:
     """Simple agreement rate (fraction of exact matches)."""
     if not labels_a:
         return 0.0
-    return round(sum(1 for a, b in zip(labels_a, labels_b) if a == b) / len(labels_a), 4)
+    return round(
+        sum(1 for a, b in zip(labels_a, labels_b) if a == b) / len(labels_a), 4
+    )
 
 
 def _safe_kappa(labels_a: list, labels_b: list) -> float:
@@ -314,25 +365,37 @@ def _compute_judge_aggregate(
     for col in SCORE_COLS:
         pcol = f"{prefix}_{col}"
         series = pd.to_numeric(df_scores[pcol], errors="coerce").dropna()
-        agg[f"{prefix}_mean_{col}"] = round(float(series.mean()), 3) if len(series) > 0 else None
+        agg[f"{prefix}_mean_{col}"] = (
+            round(float(series.mean()), 3) if len(series) > 0 else None
+        )
 
     lm_col = f"{prefix}_language_mixing"
     lm = df_scores[lm_col].apply(lambda x: x is True or str(x).lower() == "true")
     agg[f"{prefix}_language_mixing_rate"] = round(float(lm.mean()), 3)
 
-    if df_baseline_scores is not None and baseline_prefix and len(df_baseline_scores) == n:
+    if (
+        df_baseline_scores is not None
+        and baseline_prefix
+        and len(df_baseline_scores) == n
+    ):
         for col in SCORE_COLS:
             ft = pd.to_numeric(df_scores[f"{prefix}_{col}"], errors="coerce")
-            bl = pd.to_numeric(df_baseline_scores[f"{baseline_prefix}_{col}"], errors="coerce")
+            bl = pd.to_numeric(
+                df_baseline_scores[f"{baseline_prefix}_{col}"], errors="coerce"
+            )
             delta = (ft - bl).dropna()
-            agg[f"{prefix}_mean_delta_{col}"] = round(float(delta.mean()), 3) if len(delta) > 0 else None
+            agg[f"{prefix}_mean_delta_{col}"] = (
+                round(float(delta.mean()), 3) if len(delta) > 0 else None
+            )
 
         bl_lm = df_baseline_scores[f"{baseline_prefix}_language_mixing"].apply(
             lambda x: x is True or str(x).lower() == "true"
         )
         agg[f"{prefix}_baseline_language_mixing_rate"] = round(float(bl_lm.mean()), 3)
         agg[f"{prefix}_delta_language_mixing_rate"] = round(
-            agg[f"{prefix}_language_mixing_rate"] - agg[f"{prefix}_baseline_language_mixing_rate"], 3
+            agg[f"{prefix}_language_mixing_rate"]
+            - agg[f"{prefix}_baseline_language_mixing_rate"],
+            3,
         )
 
     if df_pairwise is not None:
@@ -343,7 +406,9 @@ def _compute_judge_aggregate(
             agg[f"{prefix}_{short}_win"] = int(counts.get("finetuned", 0))
             agg[f"{prefix}_{short}_tie"] = int(counts.get("tie", 0))
             agg[f"{prefix}_{short}_loss"] = int(counts.get("baseline", 0))
-            agg[f"{prefix}_{short}_win_rate"] = round(agg[f"{prefix}_{short}_win"] / n, 3) if n > 0 else None
+            agg[f"{prefix}_{short}_win_rate"] = (
+                round(agg[f"{prefix}_{short}_win"] / n, 3) if n > 0 else None
+            )
 
     return agg
 
@@ -360,9 +425,15 @@ def compute_aggregate(
 
     for prefix in ["j1", "j2"]:
         bp = prefix if df_baseline_scores is not None else None
-        agg.update(_compute_judge_aggregate(
-            df_scores, prefix, df_baseline_scores, bp, df_pairwise,
-        ))
+        agg.update(
+            _compute_judge_aggregate(
+                df_scores,
+                prefix,
+                df_baseline_scores,
+                bp,
+                df_pairwise,
+            )
+        )
 
     for col in SCORE_COLS:
         j1 = agg.get(f"j1_mean_{col}")
@@ -372,16 +443,36 @@ def compute_aggregate(
 
     # Inter-judge agreement on absolute scores
     for col in SCORE_COLS:
-        j1_vals = pd.to_numeric(df_scores[f"j1_{col}"], errors="coerce").dropna().astype(int).tolist()
-        j2_vals = pd.to_numeric(df_scores[f"j2_{col}"], errors="coerce").dropna().astype(int).tolist()
+        j1_vals = (
+            pd.to_numeric(df_scores[f"j1_{col}"], errors="coerce")
+            .dropna()
+            .astype(int)
+            .tolist()
+        )
+        j2_vals = (
+            pd.to_numeric(df_scores[f"j2_{col}"], errors="coerce")
+            .dropna()
+            .astype(int)
+            .tolist()
+        )
         min_len = min(len(j1_vals), len(j2_vals))
         if min_len > 0:
-            agg[f"agreement_{col}"] = _agreement_rate(j1_vals[:min_len], j2_vals[:min_len])
+            agg[f"agreement_{col}"] = _agreement_rate(
+                j1_vals[:min_len], j2_vals[:min_len]
+            )
             agg[f"kappa_{col}"] = _safe_kappa(j1_vals[:min_len], j2_vals[:min_len])
 
     # Inter-judge agreement on language mixing
-    j1_lm = df_scores["j1_language_mixing"].apply(lambda x: x is True or str(x).lower() == "true").tolist()
-    j2_lm = df_scores["j2_language_mixing"].apply(lambda x: x is True or str(x).lower() == "true").tolist()
+    j1_lm = (
+        df_scores["j1_language_mixing"]
+        .apply(lambda x: x is True or str(x).lower() == "true")
+        .tolist()
+    )
+    j2_lm = (
+        df_scores["j2_language_mixing"]
+        .apply(lambda x: x is True or str(x).lower() == "true")
+        .tolist()
+    )
     agg["agreement_language_mixing"] = _agreement_rate(j1_lm, j2_lm)
     agg["kappa_language_mixing"] = _safe_kappa(
         [str(x) for x in j1_lm], [str(x) for x in j2_lm]
@@ -493,7 +584,11 @@ def log_to_mlflow(
 
     with mlflow.start_run(run_name=f"eval-{model_label}"):
         # Log all aggregate metrics
-        metrics = {k: v for k, v in agg.items() if isinstance(v, (int, float)) and v is not None}
+        metrics = {
+            k: v
+            for k, v in agg.items()
+            if isinstance(v, (int, float)) and v is not None
+        }
         mlflow.log_metrics(metrics)
 
         # Log model label and sample count as params
@@ -503,12 +598,18 @@ def log_to_mlflow(
         # Download eval results from blob to a temp dir, then log as artifacts
         with tempfile.TemporaryDirectory() as tmp_dir:
             try:
-                download_blob_directory(storage_account, container, blob_prefix, tmp_dir)
+                download_blob_directory(
+                    storage_account, container, blob_prefix, tmp_dir
+                )
                 for f in Path(tmp_dir).rglob("*"):
                     if f.is_file():
-                        mlflow.log_artifact(str(f), artifact_path=str(f.relative_to(tmp_dir).parent))
+                        mlflow.log_artifact(
+                            str(f), artifact_path=str(f.relative_to(tmp_dir).parent)
+                        )
             except FileNotFoundError:
-                logger.warning("No blob artifacts found under %s to log to MLflow", blob_prefix)
+                logger.warning(
+                    "No blob artifacts found under %s to log to MLflow", blob_prefix
+                )
 
 
 def print_summary(agg: dict) -> None:

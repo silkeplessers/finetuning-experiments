@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-
 from typing import Optional
 
 from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
@@ -37,13 +36,11 @@ def download_blob_directory(
 
     blobs = list(container.list_blobs(name_starts_with=blob_prefix))
     if not blobs:
-        raise FileNotFoundError(
-            f"No blobs found under {container_name}/{blob_prefix}"
-        )
+        raise FileNotFoundError(f"No blobs found under {container_name}/{blob_prefix}")
 
     count = 0
     for blob in blobs:
-        relative = blob.name[len(blob_prefix):].lstrip("/")
+        relative = blob.name[len(blob_prefix) :].lstrip("/")
         if not relative:
             continue
 
@@ -55,7 +52,13 @@ def download_blob_directory(
             f.write(blob_client.download_blob().readall())
         count += 1
 
-    logger.info("Downloaded %d files from %s/%s -> %s", count, container_name, blob_prefix, local_dir)
+    logger.info(
+        "Downloaded %d files from %s/%s -> %s",
+        count,
+        container_name,
+        blob_prefix,
+        local_dir,
+    )
     return str(local_path)
 
 
@@ -98,7 +101,13 @@ def upload_directory_to_blob(
         with open(file, "rb") as f:
             blob_client.upload_blob(f, overwrite=True)
         count += 1
-    logger.info("Uploaded %d files from %s -> %s/%s", count, local_dir, container_name, blob_prefix)
+    logger.info(
+        "Uploaded %d files from %s -> %s/%s",
+        count,
+        local_dir,
+        container_name,
+        blob_prefix,
+    )
     return count
 
 
@@ -121,3 +130,36 @@ def download_blob_file(
         f.write(data)
     logger.info("Downloaded %s/%s -> %s", container_name, blob_name, local_path)
     return True
+
+
+def list_blob_prefixes(
+    storage_account: str,
+    container_name: str,
+    blob_prefix: str,
+    suffix: str = "",
+) -> list[str]:
+    """List blob names under a prefix, optionally filtered by suffix."""
+    client = get_blob_service_client(storage_account)
+    container = client.get_container_client(container_name)
+    return [
+        blob.name
+        for blob in container.list_blobs(name_starts_with=blob_prefix)
+        if not suffix or blob.name.endswith(suffix)
+    ]
+
+
+def read_blob_json(
+    storage_account: str,
+    container_name: str,
+    blob_name: str,
+) -> dict | None:
+    """Read a JSON blob and return parsed dict, or None if not found."""
+    import json
+
+    client = get_blob_service_client(storage_account)
+    blob_client = client.get_blob_client(container=container_name, blob=blob_name)
+    try:
+        data = blob_client.download_blob().readall()
+        return json.loads(data)
+    except Exception:
+        return None

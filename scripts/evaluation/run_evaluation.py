@@ -35,28 +35,21 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 load_dotenv(_PROJECT_ROOT / ".env")
 
 from finetuning.config import load_config
-from finetuning.evaluation import (
-    build_judge_client,
-    compute_aggregate,
-    load_inference_results,
-    load_row_scores,
-    log_to_mlflow,
-    print_summary,
-    run_absolute_evaluation,
-    run_pairwise_evaluation,
-    save_aggregate,
-    save_charts_to_blob,
-    save_row_scores,
-)
 from finetuning.eval_visualization import generate_charts
+from finetuning.evaluation import (build_judge_client, compute_aggregate,
+                                   load_inference_results, load_row_scores,
+                                   log_to_mlflow, print_summary,
+                                   run_absolute_evaluation,
+                                   run_pairwise_evaluation, save_aggregate,
+                                   save_charts_to_blob, save_row_scores)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 STORAGE_ACCOUNT = "llmaml5615532443"
-INFERENCE_CONTAINER = "inference-results"
-EVAL_CONTAINER = "azureml-blobstore-4c704101-7a51-4680-bcf8-f13966bf69b4"
-EVAL_BLOB_PREFIX = "eval-results"
+CONTAINER = "azureml-blobstore-4c704101-7a51-4680-bcf8-f13966bf69b4"
+INFERENCE_PREFIX = "inference-results"
+EVAL_PREFIX = "eval-results"
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -82,7 +75,6 @@ def parse_args() -> argparse.Namespace:
         help="Optional local JSONL file instead of downloading from blob",
     )
     parser.add_argument("--storage-account", type=str, default=STORAGE_ACCOUNT)
-    parser.add_argument("--inference-container", type=str, default=INFERENCE_CONTAINER)
     parser.add_argument(
         "--max-workers",
         type=int,
@@ -108,9 +100,9 @@ def main() -> None:
     is_baseline = args.model_label == "baseline"
 
     storage = args.storage_account
-    eval_container = EVAL_CONTAINER
-    eval_prefix = f"{EVAL_BLOB_PREFIX}/{args.model_label}"
-    baseline_prefix = f"{EVAL_BLOB_PREFIX}/baseline"
+    container = CONTAINER
+    eval_prefix = f"{EVAL_PREFIX}/{args.model_label}"
+    baseline_prefix = f"{EVAL_PREFIX}/baseline"
 
     judges = [("j1", judge_llm_1), ("j2", judge_llm_2)]
     logger.info("Judge 1: %s | Judge 2: %s", judge_llm_1, judge_llm_2)
@@ -120,7 +112,8 @@ def main() -> None:
     df = load_inference_results(
         args.model_label,
         storage,
-        args.inference_container,
+        container,
+        INFERENCE_PREFIX,
         args.local_results,
     )
     logger.info("Loaded %d inference results", len(df))
@@ -128,12 +121,16 @@ def main() -> None:
     client = build_judge_client(azure_endpoint)
 
     # ── Absolute scoring (both judges in parallel) ────────────────────────
-    df_scores = load_row_scores(storage, eval_container, eval_prefix) if is_baseline else None
+    df_scores = (
+        load_row_scores(storage, container, eval_prefix) if is_baseline else None
+    )
 
     if df_scores is None:
-        logger.info("Running absolute evaluation (both judges) for %s ...", args.model_label)
+        logger.info(
+            "Running absolute evaluation (both judges) for %s ...", args.model_label
+        )
         df_scores = run_absolute_evaluation(df, client, judges, args.max_workers)
-        save_row_scores(df_scores, storage, eval_container, eval_prefix)
+        save_row_scores(df_scores, storage, container, eval_prefix)
     else:
         logger.info("Reusing cached row scores from blob")
 
@@ -143,35 +140,47 @@ def main() -> None:
 
     if not is_baseline:
         logger.info("Loading baseline inference results for pairwise comparison ...")
-        df_baseline = load_inference_results("baseline", storage, args.inference_container)
-        df_baseline_scores = load_row_scores(storage, eval_container, baseline_prefix)
+        df_baseline = load_inference_results(
+            "baseline", storage, container, INFERENCE_PREFIX
+        )
+        df_baseline_scores = load_row_scores(storage, container, baseline_prefix)
 
         if df_baseline_scores is None:
-            logger.info("Baseline row scores not cached — running baseline evaluation first ...")
-            df_baseline_scores = run_absolute_evaluation(df_baseline, client, judges, args.max_workers)
-            save_row_scores(df_baseline_scores, storage, eval_container, baseline_prefix)
+            logger.info(
+                "Baseline row scores not cached — running baseline evaluation first ..."
+            )
+            df_baseline_scores = run_absolute_evaluation(
+                df_baseline, client, judges, args.max_workers
+            )
+            save_row_scores(df_baseline_scores, storage, container, baseline_prefix)
 
         logger.info("Running pairwise evaluation (both judges) ...")
-        df_pairwise = run_pairwise_evaluation(df_baseline, df, client, judges, args.max_workers)
-        save_row_scores(df_pairwise, storage, eval_container, eval_prefix, "pairwise.jsonl")
+        df_pairwise = run_pairwise_evaluation(
+            df_baseline, df, client, judges, args.max_workers
+        )
+        save_row_scores(df_pairwise, storage, container, eval_prefix, "pairwise.jsonl")
 
     # ── Aggregate metrics ─────────────────────────────────────────────────
-    agg = compute_aggregate(df_scores, args.model_label, df_pairwise, df_baseline_scores)
-    save_aggregate(agg, storage, eval_container, eval_prefix)
+    agg = compute_aggregate(
+        df_scores, args.model_label, df_pairwise, df_baseline_scores
+    )
+    save_aggregate(agg, storage, container, eval_prefix)
     print_summary(agg)
 
     # ── Charts ────────────────────────────────────────────────────────────
     with tempfile.TemporaryDirectory() as charts_dir:
         charts_path = Path(charts_dir)
         generate_charts(agg, df_scores, charts_path, df_baseline_scores, df_pairwise)
-        save_charts_to_blob(charts_path, storage, eval_container, eval_prefix)
+        save_charts_to_blob(charts_path, storage, container, eval_prefix)
 
     # ── MLflow ────────────────────────────────────────────────────────────
     if not args.skip_mlflow:
-        log_to_mlflow(agg, args.model_label, experiment_name, storage, eval_container, eval_prefix)
+        log_to_mlflow(
+            agg, args.model_label, experiment_name, storage, container, eval_prefix
+        )
         logger.info("Logged to MLflow experiment: %s", experiment_name)
 
-    logger.info("Evaluation complete. Results in blob: %s/%s", eval_container, eval_prefix)
+    logger.info("Evaluation complete. Results in blob: %s/%s", container, eval_prefix)
 
 
 if __name__ == "__main__":

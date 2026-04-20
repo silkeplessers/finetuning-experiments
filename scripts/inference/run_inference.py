@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import gc
+import json
 import logging
 import os
 import sys
@@ -24,7 +25,6 @@ from pathlib import Path
 
 import pandas as pd
 import torch
-import json
 
 # Ensure project root is on sys.path so `finetuning` package is importable.
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
@@ -106,6 +106,7 @@ def prepare_test_data(path: str) -> pd.DataFrame:
     df = merge_instruction_into_input(df)
     return df
 
+
 def save_results(results: pd.DataFrame, output_dir: str, label: str) -> None:
     """Save inference results to a JSONL file inside *output_dir*."""
     out_path = Path(output_dir)
@@ -123,7 +124,7 @@ BASELINE_SYSTEM_PROMPT = (
 
 
 def run_baseline(
-    config: dict,   
+    config: dict,
     test_df: pd.DataFrame,
     max_new_tokens: int,
     batch_size: int,
@@ -140,7 +141,10 @@ def run_baseline(
     )
 
     predictions = run_inference(
-        model, tokenizer, test_df["prompt"].tolist(), max_new_tokens,
+        model,
+        tokenizer,
+        test_df["prompt"].tolist(),
+        max_new_tokens,
         batch_size=batch_size,
         system_prompt=BASELINE_SYSTEM_PROMPT,
         max_seq_length=model_cfg["max_seq_length"],
@@ -185,7 +189,11 @@ def run_finetuned(
     if "/paths/" in output_uri:
         blob_path_prefix = output_uri.split("/paths/", 1)[1].strip("/")
 
-    blob_prefix = f"{blob_path_prefix}/{run_name}/{final_model_subdir}/" if blob_path_prefix else f"{run_name}/{final_model_subdir}/"
+    blob_prefix = (
+        f"{blob_path_prefix}/{run_name}/{final_model_subdir}/"
+        if blob_path_prefix
+        else f"{run_name}/{final_model_subdir}/"
+    )
 
     logger.info(
         "Downloading LoRA adapters from %s/%s ...", adapter_container, blob_prefix
@@ -255,7 +263,9 @@ def main() -> None:
             output_dir,
             args.storage_account,
             args.adapter_container,
-            managed_identity_client_id=config.get("azureml", {}).get("managed_identity_client_id"),
+            managed_identity_client_id=config.get("azureml", {}).get(
+                "managed_identity_client_id"
+            ),
         )
 
     logger.info("Done.")

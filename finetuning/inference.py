@@ -25,7 +25,10 @@ def run_inference(
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
-    prompts = [build_inference_prompt(tokenizer, text, system_prompt=system_prompt) for text in inputs]
+    prompts = [
+        build_inference_prompt(tokenizer, text, system_prompt=system_prompt)
+        for text in inputs
+    ]
     max_input_length = max_seq_length - max_new_tokens
 
     # Warn on any prompts that will be truncated
@@ -34,7 +37,9 @@ def run_inference(
         if full_len > max_input_length:
             logger.warning(
                 "Prompt %d will be truncated from %d to %d tokens",
-                idx, full_len, max_input_length,
+                idx,
+                full_len,
+                max_input_length,
             )
 
     # Sort by length for efficient batching (less padding waste)

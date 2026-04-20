@@ -19,9 +19,9 @@ import sys
 import time
 from pathlib import Path
 
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
 # Add project root to path so we can import finetuning helpers
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
