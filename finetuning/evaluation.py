@@ -4,43 +4,43 @@ Design:
   - Both JUDGE_LLM_1 and JUDGE_LLM_2 score every row (columns prefixed j1_/j2_).
   - 2 API calls per row per judge: dutch_quality (merged) + instruction_following.
   - 1 pairwise API call per row per judge (quality + instruction in one prompt).
+  - All judge calls use structured outputs (Pydantic response models) — no regex parsing.
+  - Both judges run in parallel (row × judge tasks submitted to a single thread pool).
   - Baseline row-level scores are cached and reused across experiments.
   - Aggregates are computed per judge, then combined with inter-judge agreement
-    (Cohen's Kappa and simple agreement rate).
+    (Cohen's Kappa via sklearn and simple agreement rate).
   - MLflow is used as the experiment tracker: one MLflow run per evaluation.
 """
 
 import json
 import logging
 import random
-import re
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
+from sklearn.metrics import cohen_kappa_score
 
-from finetuning.blob_storage import download_blob_directory, download_blob_file, upload_directory_to_blob, upload_file_to_blob
+from finetuning.blob_storage import (
+    download_blob_directory,
+    download_blob_file,
+    upload_directory_to_blob,
+    upload_file_to_blob,
+)
 from finetuning.judge_prompts import (
     DUTCH_QUALITY_SYSTEM,
     INSTRUCTION_FOLLOWING_SYSTEM,
     PAIRWISE_SYSTEM,
 )
+from finetuning.schemas import (
+    DutchQualityResult,
+    InstructionFollowingResult,
+    PairwiseResult,
+)
 
 logger = logging.getLogger(__name__)
 
-# Column keys produced by each judge call
-QUALITY_KEYS = [
-    "grammar_score", "grammar_justification",
-    "fluency_score", "fluency_justification",
-    "vocabulary_score", "vocabulary_justification",
-    "language_mixing", "language_mixing_examples",
-]
-INSTRUCTION_KEYS = ["instruction_following_score", "instruction_following_justification"]
-PAIRWISE_KEYS = [
-    "quality_winner", "quality_justification",
-    "instruction_winner", "instruction_justification",
-]
 SCORE_COLS = ["grammar_score", "fluency_score", "vocabulary_score", "instruction_following_score"]
 
 # ── Client builder ────────────────────────────────────────────────────────────
@@ -64,63 +64,43 @@ def build_judge_client(azure_endpoint: str):
     )
 
 
-# ── Response parsing ─────────────────────────────────────────────────────────
+# ── Structured judge calls ───────────────────────────────────────────────────
 
 
-def _parse_judge_response(text: str, expected_keys: list[str]) -> dict:
-    """Best-effort extraction of judge JSON from LLM output."""
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    match = re.search(r"\{.+\}", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    return {k: (None if "score" in k else text.strip()) for k in expected_keys}
-
-
-def _judge_call(client, model: str, system: str, user_msg: str, expected_keys: list[str]) -> dict:
-    """Generic single judge API call."""
-    response = client.chat.completions.create(
+def _judge_call(client, model: str, system: str, user_msg: str, response_format):
+    """Single judge API call with structured output. Returns a Pydantic model instance."""
+    completion = client.beta.chat.completions.parse(
         model=model,
         temperature=0,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user_msg},
         ],
+        response_format=response_format,
     )
-    return _parse_judge_response(response.choices[0].message.content, expected_keys)
+    return completion.choices[0].message.parsed
 
 
-# ── Judge calls (2 per row for absolute, 1 for pairwise) ─────────────────────
-
-
-def evaluate_dutch_quality(client, model: str, prompt: str, response_text: str) -> dict:
+def evaluate_dutch_quality(client, model: str, prompt: str, response_text: str) -> DutchQualityResult:
     """Single call returning grammar, fluency, vocabulary, and language mixing."""
     user_msg = f"Prompt:\n{prompt}\n\nModel response:\n{response_text}"
-    return _judge_call(client, model, DUTCH_QUALITY_SYSTEM, user_msg, QUALITY_KEYS)
+    return _judge_call(client, model, DUTCH_QUALITY_SYSTEM, user_msg, DutchQualityResult)
 
 
-def evaluate_instruction_following(client, model: str, prompt: str, expected: str, response_text: str) -> dict:
+def evaluate_instruction_following(client, model: str, prompt: str, expected: str, response_text: str) -> InstructionFollowingResult:
     user_msg = (
         f"Prompt:\n{prompt}\n\n"
         f"Expected response:\n{expected}\n\n"
         f"Model response:\n{response_text}"
     )
-    return _judge_call(client, model, INSTRUCTION_FOLLOWING_SYSTEM, user_msg, INSTRUCTION_KEYS)
+    return _judge_call(client, model, INSTRUCTION_FOLLOWING_SYSTEM, user_msg, InstructionFollowingResult)
 
 
 def evaluate_row(client, model: str, prompt: str, expected: str, response_text: str) -> dict:
-    """2 API calls: dutch_quality + instruction_following."""
-    result = {}
-    result.update(evaluate_dutch_quality(client, model, prompt, response_text))
-    result.update(evaluate_instruction_following(client, model, prompt, expected, response_text))
-    return result
+    """2 API calls: dutch_quality + instruction_following. Returns flat dict."""
+    quality = evaluate_dutch_quality(client, model, prompt, response_text)
+    instruction = evaluate_instruction_following(client, model, prompt, expected, response_text)
+    return {**quality.model_dump(), **instruction.model_dump()}
 
 
 # ── Pairwise ──────────────────────────────────────────────────────────────────
@@ -163,12 +143,12 @@ def evaluate_pairwise(
 ) -> dict:
     """Single pairwise call returning quality_winner + instruction_winner."""
     user_msg, swapped = _build_pairwise_msg(prompt, baseline_text, finetuned_text, expected)
-    raw = _judge_call(client, model, PAIRWISE_SYSTEM, user_msg, PAIRWISE_KEYS)
+    result = _judge_call(client, model, PAIRWISE_SYSTEM, user_msg, PairwiseResult)
     return {
-        "pairwise_quality_winner": _map_winner(str(raw.get("quality_winner", "")), swapped),
-        "pairwise_quality_justification": raw.get("quality_justification", ""),
-        "pairwise_instruction_winner": _map_winner(str(raw.get("instruction_winner", "")), swapped),
-        "pairwise_instruction_justification": raw.get("instruction_justification", ""),
+        "pairwise_quality_winner": _map_winner(result.quality_winner.value, swapped),
+        "pairwise_quality_justification": result.quality_justification,
+        "pairwise_instruction_winner": _map_winner(result.instruction_winner.value, swapped),
+        "pairwise_instruction_justification": result.instruction_justification,
     }
 
 
@@ -199,51 +179,52 @@ def load_inference_results(
         return pd.read_json(downloaded, lines=True)
 
 
-# ── Concurrent runners ───────────────────────────────────────────────────────
-
-
-def _run_concurrent(func, items: list, max_workers: int, label: str) -> list:
-    """Run func(idx, item) concurrently and return ordered results."""
-    results = [None] * len(items)
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(func, i, item): i for i, item in enumerate(items)}
-        done = 0
-        total = len(futures)
-        for future in as_completed(futures):
-            idx, result = future.result()
-            results[idx] = result
-            done += 1
-            if done % 10 == 0 or done == total:
-                logger.info("[%s] %d/%d", label, done, total)
-    return results
-
-
-def _prefix_dict(d: dict, prefix: str) -> dict:
-    """Add a prefix to all dictionary keys."""
-    return {f"{prefix}{k}": v for k, v in d.items()}
+# ── Parallel dual-judge runners ──────────────────────────────────────────────
 
 
 def run_absolute_evaluation(
     df: pd.DataFrame,
     client,
-    judge_model: str,
-    judge_label: str,
-    max_workers: int = 4,
+    judges: list[tuple[str, str]],
+    max_workers: int = 8,
 ) -> pd.DataFrame:
-    """Run absolute scoring with a single judge. Columns are prefixed with judge_label (e.g. j1_)."""
+    """Run absolute scoring with all judges in parallel.
+
+    Args:
+        judges: list of (judge_label, judge_model) e.g. [("j1", "gpt-5"), ("j2", "grok-4")].
+        max_workers: total thread pool size (shared across all judges).
+
+    All (row × judge) combinations are submitted to a single thread pool.
+    """
     rows = list(df.iterrows())
+    n_tasks = len(rows) * len(judges)
 
-    def _eval(i, item):
-        _, row = item
+    # Each task is (row_idx, judge_label)
+    tasks = [(i, row, jl, jm) for i, (_, row) in enumerate(rows) for jl, jm in judges]
+
+    def _eval(task):
+        row_idx, row, judge_label, judge_model = task
         result = evaluate_row(client, judge_model, row["input"], row["expected_output"], row["predicted_output"])
-        return i, result
+        return row_idx, judge_label, result
 
-    results = _run_concurrent(_eval, rows, max_workers, f"absolute-{judge_label}")
+    # Collect results keyed by (row_idx, judge_label)
+    results: dict[tuple[int, str], dict] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_eval, t): t for t in tasks}
+        done = 0
+        for future in as_completed(futures):
+            row_idx, judge_label, result = future.result()
+            results[(row_idx, judge_label)] = result
+            done += 1
+            if done % 20 == 0 or done == n_tasks:
+                logger.info("[absolute] %d/%d", done, n_tasks)
 
+    # Build output DataFrame
     df = df.copy()
-    all_keys = QUALITY_KEYS + INSTRUCTION_KEYS
-    for key in all_keys:
-        df[f"{judge_label}_{key}"] = [r.get(key) for r in results]
+    for jl, _ in judges:
+        keys = list(DutchQualityResult.model_fields) + list(InstructionFollowingResult.model_fields)
+        for key in keys:
+            df[f"{jl}_{key}"] = [results[(i, jl)].get(key) for i in range(len(rows))]
     return df
 
 
@@ -251,23 +232,39 @@ def run_pairwise_evaluation(
     df_baseline: pd.DataFrame,
     df_finetuned: pd.DataFrame,
     client,
-    judge_model: str,
-    judge_label: str,
-    max_workers: int = 4,
+    judges: list[tuple[str, str]],
+    max_workers: int = 8,
 ) -> pd.DataFrame:
-    """Run pairwise comparison with a single judge. Columns prefixed with judge_label."""
+    """Run pairwise comparison with all judges in parallel."""
     pairs = list(zip(df_baseline.iterrows(), df_finetuned.iterrows()))
+    n_tasks = len(pairs) * len(judges)
 
-    def _eval(i, item):
-        (_, b_row), (_, f_row) = item
+    tasks = [
+        (i, b_row, f_row, jl, jm)
+        for i, ((_, b_row), (_, f_row)) in enumerate(pairs)
+        for jl, jm in judges
+    ]
+
+    def _eval(task):
+        pair_idx, b_row, f_row, judge_label, judge_model = task
         result = evaluate_pairwise(
             client, judge_model, b_row["input"], b_row["expected_output"],
             b_row["predicted_output"], f_row["predicted_output"],
         )
-        return i, result
+        return pair_idx, judge_label, result
 
-    results = _run_concurrent(_eval, pairs, max_workers, f"pairwise-{judge_label}")
+    results: dict[tuple[int, str], dict] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_eval, t): t for t in tasks}
+        done = 0
+        for future in as_completed(futures):
+            pair_idx, judge_label, result = future.result()
+            results[(pair_idx, judge_label)] = result
+            done += 1
+            if done % 20 == 0 or done == n_tasks:
+                logger.info("[pairwise] %d/%d", done, n_tasks)
 
+    # Build output DataFrame
     df = df_baseline[["input", "expected_output"]].copy()
     df["baseline_output"] = df_baseline["predicted_output"].values
     df["finetuned_output"] = df_finetuned["predicted_output"].values
@@ -275,37 +272,13 @@ def run_pairwise_evaluation(
         "pairwise_quality_winner", "pairwise_quality_justification",
         "pairwise_instruction_winner", "pairwise_instruction_justification",
     ]
-    for key in pairwise_cols:
-        df[f"{judge_label}_{key}"] = [r.get(key) for r in results]
+    for jl, _ in judges:
+        for key in pairwise_cols:
+            df[f"{jl}_{key}"] = [results[(i, jl)].get(key) for i in range(len(pairs))]
     return df
 
 
 # ── Inter-judge agreement ────────────────────────────────────────────────────
-
-
-def _cohens_kappa(labels_a: list, labels_b: list) -> float:
-    """Compute Cohen's Kappa for two lists of categorical labels."""
-    n = len(labels_a)
-    if n == 0:
-        return 0.0
-    categories = sorted(set(labels_a) | set(labels_b))
-    if len(categories) <= 1:
-        return 1.0
-
-    # Observed agreement
-    agree = sum(1 for a, b in zip(labels_a, labels_b) if a == b)
-    p_o = agree / n
-
-    # Expected agreement
-    p_e = 0.0
-    for cat in categories:
-        p_a = sum(1 for x in labels_a if x == cat) / n
-        p_b = sum(1 for x in labels_b if x == cat) / n
-        p_e += p_a * p_b
-
-    if p_e == 1.0:
-        return 1.0
-    return round((p_o - p_e) / (1 - p_e), 4)
 
 
 def _agreement_rate(labels_a: list, labels_b: list) -> float:
@@ -313,6 +286,15 @@ def _agreement_rate(labels_a: list, labels_b: list) -> float:
     if not labels_a:
         return 0.0
     return round(sum(1 for a, b in zip(labels_a, labels_b) if a == b) / len(labels_a), 4)
+
+
+def _safe_kappa(labels_a: list, labels_b: list) -> float:
+    """Cohen's Kappa via sklearn, returning 1.0 when all labels agree on one value."""
+    if not labels_a:
+        return 0.0
+    if len(set(labels_a) | set(labels_b)) <= 1:
+        return 1.0
+    return round(float(cohen_kappa_score(labels_a, labels_b)), 4)
 
 
 # ── Aggregate metrics ─────────────────────────────────────────────────────────
@@ -329,18 +311,15 @@ def _compute_judge_aggregate(
     n = len(df_scores)
     agg: dict = {}
 
-    # Mean absolute scores
     for col in SCORE_COLS:
         pcol = f"{prefix}_{col}"
         series = pd.to_numeric(df_scores[pcol], errors="coerce").dropna()
         agg[f"{prefix}_mean_{col}"] = round(float(series.mean()), 3) if len(series) > 0 else None
 
-    # Language mixing rate
     lm_col = f"{prefix}_language_mixing"
     lm = df_scores[lm_col].apply(lambda x: x is True or str(x).lower() == "true")
     agg[f"{prefix}_language_mixing_rate"] = round(float(lm.mean()), 3)
 
-    # Score deltas vs baseline
     if df_baseline_scores is not None and baseline_prefix and len(df_baseline_scores) == n:
         for col in SCORE_COLS:
             ft = pd.to_numeric(df_scores[f"{prefix}_{col}"], errors="coerce")
@@ -356,7 +335,6 @@ def _compute_judge_aggregate(
             agg[f"{prefix}_language_mixing_rate"] - agg[f"{prefix}_baseline_language_mixing_rate"], 3
         )
 
-    # Pairwise win/tie/loss
     if df_pairwise is not None:
         for dim in ["pairwise_quality_winner", "pairwise_instruction_winner"]:
             pcol = f"{prefix}_{dim}"
@@ -380,35 +358,32 @@ def compute_aggregate(
     n = len(df_scores)
     agg: dict = {"model_label": model_label, "n_samples": n}
 
-    # Per-judge aggregates
-    baseline_prefix = "j1" if df_baseline_scores is not None else None
     for prefix in ["j1", "j2"]:
         bp = prefix if df_baseline_scores is not None else None
         agg.update(_compute_judge_aggregate(
             df_scores, prefix, df_baseline_scores, bp, df_pairwise,
         ))
 
-    # Combined mean (average of both judges)
     for col in SCORE_COLS:
         j1 = agg.get(f"j1_mean_{col}")
         j2 = agg.get(f"j2_mean_{col}")
         if j1 is not None and j2 is not None:
             agg[f"combined_mean_{col}"] = round((j1 + j2) / 2, 3)
 
-    # Inter-judge agreement on absolute scores (binned to same integer)
+    # Inter-judge agreement on absolute scores
     for col in SCORE_COLS:
         j1_vals = pd.to_numeric(df_scores[f"j1_{col}"], errors="coerce").dropna().astype(int).tolist()
         j2_vals = pd.to_numeric(df_scores[f"j2_{col}"], errors="coerce").dropna().astype(int).tolist()
         min_len = min(len(j1_vals), len(j2_vals))
         if min_len > 0:
             agg[f"agreement_{col}"] = _agreement_rate(j1_vals[:min_len], j2_vals[:min_len])
-            agg[f"kappa_{col}"] = _cohens_kappa(j1_vals[:min_len], j2_vals[:min_len])
+            agg[f"kappa_{col}"] = _safe_kappa(j1_vals[:min_len], j2_vals[:min_len])
 
-    # Inter-judge agreement on language mixing (boolean)
+    # Inter-judge agreement on language mixing
     j1_lm = df_scores["j1_language_mixing"].apply(lambda x: x is True or str(x).lower() == "true").tolist()
     j2_lm = df_scores["j2_language_mixing"].apply(lambda x: x is True or str(x).lower() == "true").tolist()
     agg["agreement_language_mixing"] = _agreement_rate(j1_lm, j2_lm)
-    agg["kappa_language_mixing"] = _cohens_kappa(
+    agg["kappa_language_mixing"] = _safe_kappa(
         [str(x) for x in j1_lm], [str(x) for x in j2_lm]
     )
 
@@ -419,7 +394,7 @@ def compute_aggregate(
             j2_w = df_pairwise[f"j2_{dim}"].tolist()
             short = dim.replace("_winner", "")
             agg[f"agreement_{short}"] = _agreement_rate(j1_w, j2_w)
-            agg[f"kappa_{short}"] = _cohens_kappa(j1_w, j2_w)
+            agg[f"kappa_{short}"] = _safe_kappa(j1_w, j2_w)
 
     return agg
 

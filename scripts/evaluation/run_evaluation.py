@@ -112,6 +112,9 @@ def main() -> None:
     eval_prefix = f"{EVAL_BLOB_PREFIX}/{args.model_label}"
     baseline_prefix = f"{EVAL_BLOB_PREFIX}/baseline"
 
+    judges = [("j1", judge_llm_1), ("j2", judge_llm_2)]
+    logger.info("Judge 1: %s | Judge 2: %s", judge_llm_1, judge_llm_2)
+
     # Load inference results
     logger.info("Loading inference results for model: %s", args.model_label)
     df = load_inference_results(
@@ -123,25 +126,18 @@ def main() -> None:
     logger.info("Loaded %d inference results", len(df))
 
     client = build_judge_client(azure_endpoint)
-    judges = [("j1", judge_llm_1), ("j2", judge_llm_2)]
-    logger.info("Judge 1: %s | Judge 2: %s", judge_llm_1, judge_llm_2)
 
-    # ── Absolute scoring (both judges) ────────────────────────────────────
-    # For baseline: reuse cached scores if they exist in blob
+    # ── Absolute scoring (both judges in parallel) ────────────────────────
     df_scores = load_row_scores(storage, eval_container, eval_prefix) if is_baseline else None
 
     if df_scores is None:
-        df_scores = df.copy()
-        for judge_label, judge_model in judges:
-            logger.info("Running absolute evaluation [%s=%s] for %s ...", judge_label, judge_model, args.model_label)
-            df_scores = run_absolute_evaluation(
-                df_scores, client, judge_model, judge_label, args.max_workers
-            )
+        logger.info("Running absolute evaluation (both judges) for %s ...", args.model_label)
+        df_scores = run_absolute_evaluation(df, client, judges, args.max_workers)
         save_row_scores(df_scores, storage, eval_container, eval_prefix)
     else:
         logger.info("Reusing cached row scores from blob")
 
-    # ── Pairwise comparison (finetuned only, both judges) ─────────────────
+    # ── Pairwise comparison (finetuned only, both judges in parallel) ─────
     df_pairwise = None
     df_baseline_scores = None
 
@@ -152,29 +148,11 @@ def main() -> None:
 
         if df_baseline_scores is None:
             logger.info("Baseline row scores not cached — running baseline evaluation first ...")
-            df_baseline_scores = df_baseline.copy()
-            for judge_label, judge_model in judges:
-                logger.info("Running absolute evaluation [%s=%s] for baseline ...", judge_label, judge_model)
-                df_baseline_scores = run_absolute_evaluation(
-                    df_baseline_scores, client, judge_model, judge_label, args.max_workers
-                )
+            df_baseline_scores = run_absolute_evaluation(df_baseline, client, judges, args.max_workers)
             save_row_scores(df_baseline_scores, storage, eval_container, baseline_prefix)
 
-        # Run pairwise for each judge, merging columns into one DF
-        df_pairwise = df_baseline[["input", "expected_output"]].copy()
-        df_pairwise["baseline_output"] = df_baseline["predicted_output"].values
-        df_pairwise["finetuned_output"] = df["predicted_output"].values
-
-        for judge_label, judge_model in judges:
-            logger.info("Running pairwise evaluation [%s=%s] ...", judge_label, judge_model)
-            df_pw = run_pairwise_evaluation(
-                df_baseline, df, client, judge_model, judge_label, args.max_workers
-            )
-            # Merge judge-specific pairwise columns into the combined DF
-            for col in df_pw.columns:
-                if col.startswith(judge_label):
-                    df_pairwise[col] = df_pw[col].values
-
+        logger.info("Running pairwise evaluation (both judges) ...")
+        df_pairwise = run_pairwise_evaluation(df_baseline, df, client, judges, args.max_workers)
         save_row_scores(df_pairwise, storage, eval_container, eval_prefix, "pairwise.jsonl")
 
     # ── Aggregate metrics ─────────────────────────────────────────────────
