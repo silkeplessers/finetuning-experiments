@@ -26,8 +26,11 @@ finetuning-experiments/
 │   ├── blob_storage.py                # Azure Blob upload/download helpers
 │   ├── config.py                      # Config loader
 │   ├── data.py                        # Dataset loading, preprocessing, splitting
+│   ├── eval_visualization.py          # Per-judge charts + agreement heatmap
+│   ├── evaluation.py                  # Judge calls, aggregation, MLflow, persistence
 │   ├── formatting.py                  # Chat template formatting helpers
 │   ├── inference.py                   # Inference utilities
+│   ├── judge_prompts.py               # System prompts for dual-judge evaluation
 │   ├── model.py                       # Model loading (base + finetuned)
 │   ├── prompts.py                     # System prompt and chat template builders
 │   └── schemas.py                     # Pydantic models for structured output
@@ -42,7 +45,8 @@ finetuning-experiments/
 │   │   ├── finetune_qlora.py          # QLoRA finetuning with Unsloth
 │   │   └── submit_azureml_job.py      # Submit training job to Azure ML
 │   ├── evaluation/
-│   │   └── run_evaluation.py          # Evaluate finetuned vs base model
+│   │   ├── run_evaluation.py          # Dual-judge evaluation pipeline
+│   │   └── dashboard.py              # Streamlit cross-experiment dashboard
 │   └── inference/
 │       └── run_inference.py           # Run inference on finetuned model
 ├── outputs/                           # Training checkpoints and merged models
@@ -64,6 +68,8 @@ Create a `.env` file with:
 ```
 ENDPOINT=https://<your-resource>.openai.azure.com/openai/v1/
 DEPLOYMENT=<your-deployment-name>
+JUDGE_LLM_1=<judge-deployment-1>       # e.g. gpt-5.3-chat
+JUDGE_LLM_2=<judge-deployment-2>       # e.g. grok-4-1-fast-reasoning
 STORAGE_ACCOUNT=<your-storage-account>
 CONTAINER_NAME=<your-container-name>
 ```
@@ -100,12 +106,32 @@ python scripts/training/finetune_qlora.py --config configs/qlora_config.json
 python scripts/training/submit_azureml_job.py --config configs/qlora_config.json
 ```
 
-## Inference & Evaluation
+## Inference
 
 ```bash
 python scripts/inference/run_inference.py --config configs/qlora_config.json
-python scripts/evaluation/run_evaluation.py --config configs/qlora_config.json
 ```
+
+## Evaluation
+
+Dual-judge evaluation with structured outputs, parallel execution, baseline caching, and inter-judge agreement (Cohen's Kappa). Results are persisted to blob storage and logged to MLflow.
+
+```bash
+# Evaluate baseline (scores are cached for reuse)
+python scripts/evaluation/run_evaluation.py \
+    --config configs/qlora_config.json \
+    --model-label baseline
+
+# Evaluate finetuned model (runs pairwise vs cached baseline)
+python scripts/evaluation/run_evaluation.py \
+    --config configs/qlora_config.json \
+    --model-label mistral_r16_a16_e1_b16_w30
+
+# Streamlit dashboard for cross-experiment comparison
+streamlit run scripts/evaluation/dashboard.py
+```
+
+See [scripts/evaluation/README.md](scripts/evaluation/README.md) for full details.
 
 ## Model
 
