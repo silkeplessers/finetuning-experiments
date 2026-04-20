@@ -46,6 +46,7 @@ SCORE_COLS = [
     "fluency_score",
     "vocabulary_score",
     "instruction_following_score",
+    "correctness_score",
 ]
 
 # ── Client builder ────────────────────────────────────────────────────────────
@@ -96,11 +97,10 @@ async def evaluate_dutch_quality(
 
 
 async def evaluate_instruction_following(
-    client, model: str, prompt: str, expected: str, response_text: str
+    client, model: str, prompt: str, response_text: str
 ) -> InstructionFollowingResult:
     user_msg = (
         f"Prompt:\n{prompt}\n\n"
-        f"Expected response:\n{expected}\n\n"
         f"Model response:\n{response_text}"
     )
     return await _judge_call(
@@ -113,12 +113,12 @@ async def evaluate_instruction_following(
 
 
 async def evaluate_row(
-    client, model: str, prompt: str, expected: str, response_text: str
+    client, model: str, prompt: str, response_text: str
 ) -> dict:
     """2 API calls in parallel: dutch_quality + instruction_following. Returns flat dict."""
     quality, instruction = await asyncio.gather(
         evaluate_dutch_quality(client, model, prompt, response_text),
-        evaluate_instruction_following(client, model, prompt, expected, response_text),
+        evaluate_instruction_following(client, model, prompt, response_text),
     )
     return {**quality.model_dump(), **instruction.model_dump()}
 
@@ -130,7 +130,6 @@ def _build_pairwise_msg(
     prompt: str,
     response_a: str,
     response_b: str,
-    expected: str,
 ) -> tuple[str, bool]:
     """Build pairwise user message. Returns (msg, swapped).
 
@@ -143,7 +142,6 @@ def _build_pairwise_msg(
         a_text, b_text = response_a, response_b
     parts = [
         f"Prompt:\n{prompt}",
-        f"Expected response:\n{expected}",
         f"Response A:\n{a_text}",
         f"Response B:\n{b_text}",
     ]
@@ -164,13 +162,12 @@ async def evaluate_pairwise(
     client,
     model: str,
     prompt: str,
-    expected: str,
     baseline_text: str,
     finetuned_text: str,
 ) -> dict:
     """Single pairwise call returning quality_winner + instruction_winner."""
     user_msg, swapped = _build_pairwise_msg(
-        prompt, baseline_text, finetuned_text, expected
+        prompt, baseline_text, finetuned_text
     )
     result = await _judge_call(client, model, PAIRWISE_SYSTEM, user_msg, PairwiseResult)
     return {
@@ -247,7 +244,6 @@ async def run_absolute_evaluation(
                 client,
                 judge_model,
                 row["input"],
-                row["expected_output"],
                 row["predicted_output"],
             )
         results[(row_idx, judge_label)] = result
@@ -295,7 +291,6 @@ async def run_pairwise_evaluation(
                 client,
                 judge_model,
                 b_row["input"],
-                b_row["expected_output"],
                 b_row["predicted_output"],
                 f_row["predicted_output"],
             )
@@ -312,7 +307,7 @@ async def run_pairwise_evaluation(
     await asyncio.gather(*tasks)
 
     # Build output DataFrame
-    df = df_baseline[["input", "expected_output"]].copy()
+    df = df_baseline[["input"]].copy()
     df["baseline_output"] = df_baseline["predicted_output"].values
     df["finetuned_output"] = df_finetuned["predicted_output"].values
     pairwise_cols = [

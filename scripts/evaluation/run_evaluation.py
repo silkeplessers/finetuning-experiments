@@ -23,6 +23,7 @@ Usage:
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -196,7 +197,19 @@ async def main() -> None:
             generate_charts(agg, df_scores, charts_path, df_baseline_scores, df_pairwise)
             save_charts_to_blob(charts_path, storage, container, eval_prefix)
     else:
-        logger.info("Dry-run: skipping charts and blob upload")
+        # Save dry-run results locally for row-by-row analysis
+        dry_dir = _PROJECT_ROOT / "outputs" / "eval_dry_run"
+        dry_dir.mkdir(parents=True, exist_ok=True)
+        scores_path = dry_dir / f"{args.model_label}_row_scores.jsonl"
+        df_scores.to_json(scores_path, orient="records", lines=True, force_ascii=False)
+        logger.info("Dry-run row scores saved to %s", scores_path)
+        if df_pairwise is not None:
+            pairwise_path = dry_dir / f"{args.model_label}_pairwise.jsonl"
+            df_pairwise.to_json(pairwise_path, orient="records", lines=True, force_ascii=False)
+            logger.info("Dry-run pairwise saved to %s", pairwise_path)
+        agg_path = dry_dir / f"{args.model_label}_aggregate.json"
+        agg_path.write_text(json.dumps(agg, indent=2))
+        logger.info("Dry-run aggregate saved to %s", agg_path)
 
     # ── MLflow ────────────────────────────────────────────────────────────────
     if not args.skip_mlflow and dry_run is None:

@@ -6,7 +6,19 @@ DUTCH_QUALITY_SYSTEM = """\
 You are an expert evaluator of Dutch language quality. You will receive an \
 original prompt (in Dutch) and the model's actual response.
 
-Evaluate the response on FOUR sub-dimensions, each scored 1-10:
+IMPORTANT: If the response is not in Dutch at all (e.g. entirely in English \
+or French), score all dimensions 1 and set language_mixing to true.
+
+Evaluate the response on FOUR sub-dimensions, each scored 1-10.
+
+Disambiguation: Grammar covers rule violations (incorrect forms, wrong \
+articles, spelling errors). Fluency covers naturalness and readability even \
+when the text is grammatically correct. Do not penalise the same issue under \
+both dimensions.
+
+When uncertain between two adjacent scores, use this guideline: score 7 \
+when you notice one or two minor issues; score 8 when issues are so minor \
+you need to search carefully to find them.
 
 1. **Grammar** (correctness of verb conjugation, word order, articles, spelling):
    1-2 = pervasive errors making the text barely readable (e.g. wrong verb forms \
@@ -14,13 +26,16 @@ in most sentences, scrambled word order, many misspellings).
    3-4 = frequent errors that impede understanding (e.g. inconsistent \
 subject-verb agreement, wrong article gender in several places).
    5-6 = occasional errors that are noticeable but do not block comprehension \
-(e.g. one wrong de/het, a minor spelling slip, slightly awkward word order in \
-a subordinate clause).
+(e.g. one wrong de/het, a minor spelling slip).
    7-8 = mostly correct with only minor slips a native speaker might make \
-(e.g. one comma splice, a single typo).
-   9-10 = flawless or near-flawless Dutch grammar throughout.
+(e.g. one comma splice, a single typo). Score 7 when you notice one or two \
+minor issues; score 8 when issues are so minor you need to search carefully \
+to find them.
+   9-10 = flawless or near-flawless Dutch grammar throughout. Reserve 10 for \
+texts where you cannot find a single error.
 
-2. **Fluency** (naturalness of phrasing, readability, flow):
+2. **Fluency** (naturalness of phrasing, readability, flow — even when \
+grammatically correct):
    1-2 = reads like raw machine translation — stilted, unnatural sentence \
 structures, frequent calques from English.
    3-4 = understandable but clearly non-native phrasing (e.g. overly literal \
@@ -28,8 +43,11 @@ translations like "het maakt zin" instead of "het is logisch").
    5-6 = adequate but somewhat wooden or formal compared to natural Dutch \
 (e.g. unnecessarily long subordinate clauses, repetitive sentence openers).
    7-8 = reads naturally, as a competent Dutch speaker would write, with only \
-minor stiffness in one or two phrases.
-   9-10 = fully native-level, reads like professionally written Dutch.
+minor stiffness in one or two phrases. Score 7 when you notice one or two \
+stiff phrases; score 8 when the text reads naturally and you need to search \
+carefully to find any awkwardness.
+   9-10 = fully native-level, reads like professionally written Dutch. Reserve \
+10 for texts that could appear in a quality Dutch publication.
 
 3. **Vocabulary** (appropriateness and idiomaticity of word choices):
    1-2 = frequent wrong or non-existent Dutch words, heavy reliance on \
@@ -41,15 +59,20 @@ when "beseffen" is more natural).
    5-6 = acceptable vocabulary but somewhat generic or imprecise — misses \
 opportunities for more fitting Dutch expressions.
    7-8 = appropriate and varied vocabulary with only an occasional suboptimal \
-word choice.
+word choice. Score 7 when you notice an occasional suboptimal word; score 8 \
+when choices are consistently appropriate and you need to search carefully to \
+find any imprecision.
    9-10 = rich, precise, and idiomatic Dutch vocabulary throughout.
 
 4. **Language mixing** — does the response mix in non-Dutch words/phrases \
 (English, German, etc.) where Dutch equivalents exist? \
 Proper nouns, widely-adopted loanwords (e.g. "computer", "software"), and \
 technical terms without common Dutch equivalents are acceptable. \
+When in doubt whether a word is an accepted Dutch loanword (e.g. "checken", \
+"updaten", "mailen"), treat it as acceptable. \
 Flag cases like "however" instead of "echter", "because" instead of "omdat", \
-or "features" instead of "functies".
+"features" instead of "functies", or English discourse markers ("so", \
+"basically", "actually") inserted into Dutch sentences.
 
 Reply with ONLY a JSON object (no markdown fences):
 {"grammar_score": <int 1-10>, "grammar_justification": "<one sentence>", \
@@ -61,45 +84,93 @@ Reply with ONLY a JSON object (no markdown fences):
 # ── Instruction following ─────────────────────────────────────────────────────
 
 INSTRUCTION_FOLLOWING_SYSTEM = """\
-You are an expert evaluator of instruction following. You will receive an \
-original prompt (in Dutch), an expected reference answer, and the model's \
-actual response.
+You are an expert evaluator of instruction following and response correctness. \
+You will receive an original prompt (in Dutch) and the model's actual response.
 
-Evaluate the response on **Instruction following** (faithfulness to the expected output), scored 1-10:
+Evaluate only content — do NOT penalise for language quality issues (grammar, \
+fluency, vocabulary), which are assessed separately by another judge.
+
+When uncertain between two adjacent scores, use this guideline: score 7 \
+when you notice one or two minor gaps; score 8 when gaps are so minor \
+you need to search carefully to find them.
+
+Evaluate the response on TWO dimensions, each scored 1-10.
+
+**Dimension 1 — Instruction Following** (does the response do what was asked?). \
+Judge ONLY whether the model did what was asked — not whether it matches one \
+specific answer. Many prompts are open-ended and have multiple valid responses. \
+A response that adds content beyond the instruction but fully covers the \
+required elements should not be penalised unless the extra content is \
+misleading or contradicts the answer.
 
   1-2 = Completely off-topic or refuses to answer. The response ignores the \
 instruction entirely (e.g. the prompt asks for a poem but the model outputs \
-a definition, or responds in the wrong language).
+a definition).
   3-4 = Partially addresses the instruction but misses major elements. \
 Covers the right topic but omits key requirements (e.g. asked for 3 examples \
 but gives only 1, or answers a different question than what was asked).
   5-6 = Addresses the core instruction with notable gaps. The main point is \
-correct but important details from the expected answer are missing or \
-inaccurate (e.g. gives a summary when a detailed explanation was requested).
-  7-8 = Follows instructions well with only minor deviations. Covers all key \
-points from the expected answer; may differ slightly in depth or phrasing \
-but no critical omissions.
-  9-10 = Comprehensive and faithful to the instruction. Matches or exceeds \
-the expected answer in coverage, accuracy, and level of detail.
+correct but the response is too short, too vague, or misses explicit \
+constraints stated in the prompt (e.g. gives a summary when a detailed \
+explanation was requested, or exceeds a stated word limit).
+  7-8 = Follows instructions well with only minor deviations. Covers the \
+topic thoroughly and respects all explicit constraints; may lack some depth \
+or polish but no critical omissions. Score 7 when you notice one or two \
+minor gaps; score 8 when all stated requirements are met and gaps are trivial.
+  9-10 = Comprehensive and faithful to the instruction. Fully addresses \
+everything asked for with appropriate depth, accuracy, and format.
+
+**Dimension 2 — Correctness** (is the content factually accurate and sensible?). \
+For factual prompts, check whether claims are true. For creative or open-ended \
+prompts, check whether the content is coherent, plausible, and internally consistent.
+
+  1-2 = Contains major factual errors or is nonsensical / self-contradictory \
+(e.g. wrong dates, invented facts, logically impossible claims).
+  3-4 = Has several notable inaccuracies or implausible claims that undermine \
+the response's usefulness.
+  5-6 = Mostly correct but contains one or two clear factual errors or \
+questionable claims (e.g. slightly wrong numbers, oversimplified to the point \
+of being misleading).
+  7-8 = Accurate and sensible with only minor imprecisions that do not \
+materially affect the answer's quality. Score 7 when you notice one or two \
+minor imprecisions; score 8 when imprecisions are so minor you need to \
+search carefully to find them.
+  9-10 = Fully correct, well-reasoned, and consistent throughout. For creative \
+tasks: coherent, plausible, and internally consistent.
 
 Reply with ONLY a JSON object (no markdown fences):
-{"instruction_following_score": <int 1-10>, "instruction_following_justification": "<one sentence>"}"""
+{"instruction_following_score": <int 1-10>, "instruction_following_justification": "<one sentence>", \
+"correctness_score": <int 1-10>, "correctness_justification": "<one sentence>"}"""
 
 # ── Pairwise comparison (combined) ───────────────────────────────────────────
 
 PAIRWISE_SYSTEM = """\
 You are an expert evaluator. You will receive an original prompt (in Dutch), \
-an expected reference answer, and TWO model responses labelled A and B.
+and TWO model responses labelled A and B.
 
-Compare the two responses on TWO criteria:
+The labels A and B are assigned randomly and carry no significance. Do not \
+let label order influence your judgement.
+
+Compare the two responses on TWO criteria, evaluated INDEPENDENTLY. \
+Assess Dutch quality first while ignoring content. Then assess instruction \
+following separately while ignoring language quality.
+
+If one response is not in Dutch at all, the other response wins on Dutch \
+quality automatically.
 
 1. **Dutch language quality** (grammar, fluency, vocabulary, naturalness). \
-   Do NOT consider content correctness — focus only on the quality of the Dutch.
+   Do NOT consider content correctness — focus only on the quality of the Dutch. \
+   Prefer the response with fewer unnatural calques, more idiomatic vocabulary, \
+   and better grammatical correctness.
 
 2. **Instruction following** (faithfulness, completeness, accuracy relative \
-   to the expected output).
+   to the prompt). Do NOT consider language quality here — focus only \
+   on how well the response addresses the prompt. Prefer the response that \
+   covers more of the required elements with greater accuracy.
 
-For each criterion, state which response is better: A, B, or tie.
+For each criterion, state which response is better: A, B, or tie. \
+Choose tie if the difference is negligible and you would not confidently \
+prefer one over the other in a blind test.
 
 Reply with ONLY a JSON object (no markdown fences):
 {"quality_winner": "<A, B, or tie>", "quality_justification": "<one sentence>", \

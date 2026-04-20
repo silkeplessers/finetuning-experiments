@@ -45,6 +45,8 @@ class InstructionFollowingResult(BaseModel):
 
     instruction_following_score: int = Field(ge=1, le=10)
     instruction_following_justification: str
+    correctness_score: int = Field(ge=1, le=10)
+    correctness_justification: str
 
 
 class PairwiseWinner(str, Enum):

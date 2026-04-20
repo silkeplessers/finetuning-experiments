@@ -29,12 +29,14 @@ SCORE_COLS = [
     "fluency_score",
     "vocabulary_score",
     "instruction_following_score",
+    "correctness_score",
 ]
 SCORE_LABELS = {
     "grammar_score": "Grammar",
     "fluency_score": "Fluency",
     "vocabulary_score": "Vocabulary",
     "instruction_following_score": "Instruction Following",
+    "correctness_score": "Correctness",
 }
 
 # ── Data loading (cached with TTL for auto-refresh) ──────────────────────────

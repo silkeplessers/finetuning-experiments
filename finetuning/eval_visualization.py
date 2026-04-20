@@ -21,8 +21,9 @@ SCORE_COLS = [
     "fluency_score",
     "vocabulary_score",
     "instruction_following_score",
+    "correctness_score",
 ]
-SCORE_LABELS = ["Grammar", "Fluency", "Vocabulary", "Instruction\nFollowing"]
+SCORE_LABELS = ["Grammar", "Fluency", "Vocabulary", "Instruction\nFollowing", "Correctness"]
 
 
 def _save(fig, path: Path) -> None:
@@ -53,14 +54,14 @@ def _score_distribution(
         vals = pd.to_numeric(df_scores[pcol], errors="coerce").dropna()
         ax.hist(
             vals,
-            bins=[0.5, 1.5, 2.5, 3.5, 4.5, 5.5],
+            bins=[0.5 + i for i in range(11)],
             rwidth=0.8,
             color="#4C72B0",
             edgecolor="white",
         )
         ax.set_title(name)
         ax.set_xlabel("Score")
-        ax.set_xticks([1, 2, 3, 4, 5])
+        ax.set_xticks(range(1, 11))
     axes[0].set_ylabel("Count")
     fig.suptitle(f"Score Distribution — {label} ({judge_name})", fontsize=14, y=1.02)
     _save(fig, charts_dir / f"score_distribution_{prefix}.png")
@@ -107,7 +108,7 @@ def _baseline_vs_finetuned_bars(
     ax.set_xticks(x)
     ax.set_xticklabels(SCORE_LABELS)
     ax.set_ylabel("Mean Score")
-    ax.set_ylim(0, 5.5)
+    ax.set_ylim(0, 10.5)
     ax.legend()
     ax.set_title(f"Baseline vs Finetuned — Mean Scores ({judge_name})")
 
