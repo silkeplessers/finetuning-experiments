@@ -87,6 +87,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip logging to MLflow",
     )
+    parser.add_argument(
+        "--dry-run",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Evaluate only N samples (for testing). Skips blob save and MLflow.",
+    )
     return parser.parse_args()
 
 
@@ -119,6 +126,12 @@ async def main() -> None:
     )
     logger.info("Loaded %d inference results", len(df))
 
+    # ── Dry-run subsample ─────────────────────────────────────────────────
+    dry_run = args.dry_run
+    if dry_run is not None:
+        df = df.head(dry_run)
+        logger.info("Dry-run mode: subsampled to %d rows", len(df))
+
     client = build_judge_client(azure_endpoint)
 
     # ── Absolute scoring (both judges in parallel) ────────────────────────
@@ -131,7 +144,8 @@ async def main() -> None:
             "Running absolute evaluation (both judges) for %s ...", args.model_label
         )
         df_scores = await run_absolute_evaluation(df, client, judges, args.max_workers)
-        save_row_scores(df_scores, storage, container, eval_prefix)
+        if dry_run is None:
+            save_row_scores(df_scores, storage, container, eval_prefix)
     else:
         logger.info("Reusing cached row scores from blob")
 
@@ -144,6 +158,8 @@ async def main() -> None:
         df_baseline = load_inference_results(
             "baseline", storage, container, INFERENCE_PREFIX
         )
+        if dry_run is not None:
+            df_baseline = df_baseline.head(dry_run)
         df_baseline_scores = load_row_scores(storage, container, baseline_prefix)
 
         if df_baseline_scores is None:
@@ -153,29 +169,37 @@ async def main() -> None:
             df_baseline_scores = await run_absolute_evaluation(
                 df_baseline, client, judges, args.max_workers
             )
-            save_row_scores(df_baseline_scores, storage, container, baseline_prefix)
+            if dry_run is None:
+                save_row_scores(df_baseline_scores, storage, container, baseline_prefix)
+        elif dry_run is not None:
+            df_baseline_scores = df_baseline_scores.head(dry_run)
 
         logger.info("Running pairwise evaluation (both judges) ...")
         df_pairwise = await run_pairwise_evaluation(
             df_baseline, df, client, judges, args.max_workers
         )
-        save_row_scores(df_pairwise, storage, container, eval_prefix, "pairwise.jsonl")
+        if dry_run is None:
+            save_row_scores(df_pairwise, storage, container, eval_prefix, "pairwise.jsonl")
 
     # ── Aggregate metrics ─────────────────────────────────────────────────
     agg = compute_aggregate(
         df_scores, args.model_label, df_pairwise, df_baseline_scores
     )
-    save_aggregate(agg, storage, container, eval_prefix)
+    if dry_run is None:
+        save_aggregate(agg, storage, container, eval_prefix)
     print_summary(agg)
 
-    # ── Charts ────────────────────────────────────────────────────────────
-    with tempfile.TemporaryDirectory() as charts_dir:
-        charts_path = Path(charts_dir)
-        generate_charts(agg, df_scores, charts_path, df_baseline_scores, df_pairwise)
-        save_charts_to_blob(charts_path, storage, container, eval_prefix)
+    # ── Charts ────────────────────────────────────────────────────────────────
+    if dry_run is None:
+        with tempfile.TemporaryDirectory() as charts_dir:
+            charts_path = Path(charts_dir)
+            generate_charts(agg, df_scores, charts_path, df_baseline_scores, df_pairwise)
+            save_charts_to_blob(charts_path, storage, container, eval_prefix)
+    else:
+        logger.info("Dry-run: skipping charts and blob upload")
 
-    # ── MLflow ────────────────────────────────────────────────────────────
-    if not args.skip_mlflow:
+    # ── MLflow ────────────────────────────────────────────────────────────────
+    if not args.skip_mlflow and dry_run is None:
         log_to_mlflow(
             agg, args.model_label, experiment_name, storage, container, eval_prefix
         )

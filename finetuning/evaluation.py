@@ -339,13 +339,29 @@ def _agreement_rate(labels_a: list, labels_b: list) -> float:
     )
 
 
-def _safe_kappa(labels_a: list, labels_b: list) -> float:
-    """Cohen's Kappa via sklearn, returning 1.0 when all labels agree on one value."""
+def _safe_kappa(labels_a: list, labels_b: list, weights: str = "quadratic") -> float:
+    """Weighted Cohen's Kappa via sklearn, returning 1.0 when all labels agree.
+
+    Uses quadratic weighting by default, which is appropriate for ordinal scales
+    (a 1-point difference is penalised much less than a 5-point difference).
+    For nominal labels (e.g. pairwise winners), pass weights=None.
+    """
     if not labels_a:
         return 0.0
     if len(set(labels_a) | set(labels_b)) <= 1:
         return 1.0
-    return round(float(cohen_kappa_score(labels_a, labels_b)), 4)
+    return round(float(cohen_kappa_score(labels_a, labels_b, weights=weights)), 4)
+
+
+def _within_n_agreement(labels_a: list, labels_b: list, n: int = 1) -> float:
+    """Fraction of pairs where |a - b| <= n (for ordinal scores)."""
+    if not labels_a:
+        return 0.0
+    return round(
+        sum(1 for a, b in zip(labels_a, labels_b) if abs(a - b) <= n)
+        / len(labels_a),
+        4,
+    )
 
 
 # ── Aggregate metrics ─────────────────────────────────────────────────────────
@@ -460,7 +476,12 @@ def compute_aggregate(
             agg[f"agreement_{col}"] = _agreement_rate(
                 j1_vals[:min_len], j2_vals[:min_len]
             )
-            agg[f"kappa_{col}"] = _safe_kappa(j1_vals[:min_len], j2_vals[:min_len])
+            agg[f"within_1_{col}"] = _within_n_agreement(
+                j1_vals[:min_len], j2_vals[:min_len], n=1
+            )
+            agg[f"kappa_{col}"] = _safe_kappa(
+                j1_vals[:min_len], j2_vals[:min_len], weights="quadratic"
+            )
 
     # Inter-judge agreement on language mixing
     j1_lm = (
@@ -475,7 +496,7 @@ def compute_aggregate(
     )
     agg["agreement_language_mixing"] = _agreement_rate(j1_lm, j2_lm)
     agg["kappa_language_mixing"] = _safe_kappa(
-        [str(x) for x in j1_lm], [str(x) for x in j2_lm]
+        [str(x) for x in j1_lm], [str(x) for x in j2_lm], weights=None
     )
 
     # Inter-judge agreement on pairwise winners
@@ -485,7 +506,7 @@ def compute_aggregate(
             j2_w = df_pairwise[f"j2_{dim}"].tolist()
             short = dim.replace("_winner", "")
             agg[f"agreement_{short}"] = _agreement_rate(j1_w, j2_w)
-            agg[f"kappa_{short}"] = _safe_kappa(j1_w, j2_w)
+            agg[f"kappa_{short}"] = _safe_kappa(j1_w, j2_w, weights=None)
 
     return agg
 
@@ -643,9 +664,10 @@ def print_summary(agg: dict) -> None:
         val = agg.get(f"combined_mean_{col}")
         line = f"    {col}: {val:.2f}" if val is not None else f"    {col}: N/A"
         agree = agg.get(f"agreement_{col}")
+        within1 = agg.get(f"within_1_{col}")
         kappa = agg.get(f"kappa_{col}")
         if agree is not None:
-            line += f"  (agree={agree:.1%}, κ={kappa:.3f})"
+            line += f"  (agree={agree:.1%}, within-1={within1:.1%}, κ_w={kappa:.3f})"
         lines.append(line)
 
     agree_lm = agg.get("agreement_language_mixing")

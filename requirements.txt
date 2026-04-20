@@ -11,3 +11,4 @@ azure-identity==1.25.3
 azure-storage-blob==12.28.0
 openai==2.31.0
 tqdm>=4.66.0
+azureml-mlflow==1.62.0.post2
