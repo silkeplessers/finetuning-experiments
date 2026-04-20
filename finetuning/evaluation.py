@@ -12,11 +12,11 @@ Design:
   - MLflow is used as the experiment tracker: one MLflow run per evaluation.
 """
 
+import asyncio
 import json
 import logging
 import random
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -52,9 +52,9 @@ SCORE_COLS = [
 
 
 def build_judge_client(azure_endpoint: str):
-    """Create an Azure OpenAI client using Entra ID (DefaultAzureCredential)."""
+    """Create an async Azure OpenAI client using Entra ID (DefaultAzureCredential)."""
     from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-    from openai import AzureOpenAI
+    from openai import AsyncAzureOpenAI
 
     azure_endpoint = azure_endpoint.split("/openai/")[0].rstrip("/")
 
@@ -62,7 +62,7 @@ def build_judge_client(azure_endpoint: str):
         DefaultAzureCredential(),
         "https://cognitiveservices.azure.com/.default",
     )
-    return AzureOpenAI(
+    return AsyncAzureOpenAI(
         azure_endpoint=azure_endpoint,
         azure_ad_token_provider=token_provider,
         api_version="2025-01-01-preview",
@@ -72,9 +72,9 @@ def build_judge_client(azure_endpoint: str):
 # ── Structured judge calls ───────────────────────────────────────────────────
 
 
-def _judge_call(client, model: str, system: str, user_msg: str, response_format):
-    """Single judge API call with structured output. Returns a Pydantic model instance."""
-    completion = client.beta.chat.completions.parse(
+async def _judge_call(client, model: str, system: str, user_msg: str, response_format):
+    """Single async judge API call with structured output. Returns a Pydantic model instance."""
+    completion = await client.beta.chat.completions.parse(
         model=model,
         messages=[
             {"role": "system", "content": system},
@@ -85,17 +85,17 @@ def _judge_call(client, model: str, system: str, user_msg: str, response_format)
     return completion.choices[0].message.parsed
 
 
-def evaluate_dutch_quality(
+async def evaluate_dutch_quality(
     client, model: str, prompt: str, response_text: str
 ) -> DutchQualityResult:
     """Single call returning grammar, fluency, vocabulary, and language mixing."""
     user_msg = f"Prompt:\n{prompt}\n\nModel response:\n{response_text}"
-    return _judge_call(
+    return await _judge_call(
         client, model, DUTCH_QUALITY_SYSTEM, user_msg, DutchQualityResult
     )
 
 
-def evaluate_instruction_following(
+async def evaluate_instruction_following(
     client, model: str, prompt: str, expected: str, response_text: str
 ) -> InstructionFollowingResult:
     user_msg = (
@@ -103,7 +103,7 @@ def evaluate_instruction_following(
         f"Expected response:\n{expected}\n\n"
         f"Model response:\n{response_text}"
     )
-    return _judge_call(
+    return await _judge_call(
         client,
         model,
         INSTRUCTION_FOLLOWING_SYSTEM,
@@ -112,13 +112,13 @@ def evaluate_instruction_following(
     )
 
 
-def evaluate_row(
+async def evaluate_row(
     client, model: str, prompt: str, expected: str, response_text: str
 ) -> dict:
-    """2 API calls: dutch_quality + instruction_following. Returns flat dict."""
-    quality = evaluate_dutch_quality(client, model, prompt, response_text)
-    instruction = evaluate_instruction_following(
-        client, model, prompt, expected, response_text
+    """2 API calls in parallel: dutch_quality + instruction_following. Returns flat dict."""
+    quality, instruction = await asyncio.gather(
+        evaluate_dutch_quality(client, model, prompt, response_text),
+        evaluate_instruction_following(client, model, prompt, expected, response_text),
     )
     return {**quality.model_dump(), **instruction.model_dump()}
 
@@ -160,7 +160,7 @@ def _map_winner(raw_winner: str, swapped: bool) -> str:
     return "finetuned"
 
 
-def evaluate_pairwise(
+async def evaluate_pairwise(
     client,
     model: str,
     prompt: str,
@@ -172,7 +172,7 @@ def evaluate_pairwise(
     user_msg, swapped = _build_pairwise_msg(
         prompt, baseline_text, finetuned_text, expected
     )
-    result = _judge_call(client, model, PAIRWISE_SYSTEM, user_msg, PairwiseResult)
+    result = await _judge_call(client, model, PAIRWISE_SYSTEM, user_msg, PairwiseResult)
     return {
         "pairwise_quality_winner": _map_winner(result.quality_winner.value, swapped),
         "pairwise_quality_justification": result.quality_justification,
@@ -217,48 +217,50 @@ def load_inference_results(
 # ── Parallel dual-judge runners ──────────────────────────────────────────────
 
 
-def run_absolute_evaluation(
+async def run_absolute_evaluation(
     df: pd.DataFrame,
     client,
     judges: list[tuple[str, str]],
     max_workers: int = 8,
 ) -> pd.DataFrame:
-    """Run absolute scoring with all judges in parallel.
+    """Run absolute scoring with all judges in parallel (async).
 
     Args:
         judges: list of (judge_label, judge_model) e.g. [("j1", "gpt-5"), ("j2", "grok-4")].
-        max_workers: total thread pool size (shared across all judges).
+        max_workers: max concurrent API calls (controlled via asyncio.Semaphore).
 
-    All (row × judge) combinations are submitted to a single thread pool.
+    Each row's 2 judge calls (dutch_quality + instruction_following) also run in
+    parallel within evaluate_row via asyncio.gather, so effective concurrency is
+    up to 2× max_workers API calls in flight.
     """
     rows = list(df.iterrows())
     n_tasks = len(rows) * len(judges)
+    sem = asyncio.Semaphore(max_workers)
+    done = 0
 
-    # Each task is (row_idx, judge_label)
-    tasks = [(i, row, jl, jm) for i, (_, row) in enumerate(rows) for jl, jm in judges]
-
-    def _eval(task):
-        row_idx, row, judge_label, judge_model = task
-        result = evaluate_row(
-            client,
-            judge_model,
-            row["input"],
-            row["expected_output"],
-            row["predicted_output"],
-        )
-        return row_idx, judge_label, result
-
-    # Collect results keyed by (row_idx, judge_label)
     results: dict[tuple[int, str], dict] = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_eval, t): t for t in tasks}
-        done = 0
-        for future in as_completed(futures):
-            row_idx, judge_label, result = future.result()
-            results[(row_idx, judge_label)] = result
-            done += 1
-            if done % 20 == 0 or done == n_tasks:
-                logger.info("[absolute] %d/%d", done, n_tasks)
+
+    async def _eval(row_idx, row, judge_label, judge_model):
+        nonlocal done
+        async with sem:
+            result = await evaluate_row(
+                client,
+                judge_model,
+                row["input"],
+                row["expected_output"],
+                row["predicted_output"],
+            )
+        results[(row_idx, judge_label)] = result
+        done += 1
+        if done % 20 == 0 or done == n_tasks:
+            logger.info("[absolute] %d/%d", done, n_tasks)
+
+    tasks = [
+        _eval(i, row, jl, jm)
+        for i, (_, row) in enumerate(rows)
+        for jl, jm in judges
+    ]
+    await asyncio.gather(*tasks)
 
     # Build output DataFrame
     df = df.copy()
@@ -271,45 +273,43 @@ def run_absolute_evaluation(
     return df
 
 
-def run_pairwise_evaluation(
+async def run_pairwise_evaluation(
     df_baseline: pd.DataFrame,
     df_finetuned: pd.DataFrame,
     client,
     judges: list[tuple[str, str]],
     max_workers: int = 8,
 ) -> pd.DataFrame:
-    """Run pairwise comparison with all judges in parallel."""
+    """Run pairwise comparison with all judges in parallel (async)."""
     pairs = list(zip(df_baseline.iterrows(), df_finetuned.iterrows()))
     n_tasks = len(pairs) * len(judges)
+    sem = asyncio.Semaphore(max_workers)
+    done = 0
+
+    results: dict[tuple[int, str], dict] = {}
+
+    async def _eval(pair_idx, b_row, f_row, judge_label, judge_model):
+        nonlocal done
+        async with sem:
+            result = await evaluate_pairwise(
+                client,
+                judge_model,
+                b_row["input"],
+                b_row["expected_output"],
+                b_row["predicted_output"],
+                f_row["predicted_output"],
+            )
+        results[(pair_idx, judge_label)] = result
+        done += 1
+        if done % 20 == 0 or done == n_tasks:
+            logger.info("[pairwise] %d/%d", done, n_tasks)
 
     tasks = [
-        (i, b_row, f_row, jl, jm)
+        _eval(i, b_row, f_row, jl, jm)
         for i, ((_, b_row), (_, f_row)) in enumerate(pairs)
         for jl, jm in judges
     ]
-
-    def _eval(task):
-        pair_idx, b_row, f_row, judge_label, judge_model = task
-        result = evaluate_pairwise(
-            client,
-            judge_model,
-            b_row["input"],
-            b_row["expected_output"],
-            b_row["predicted_output"],
-            f_row["predicted_output"],
-        )
-        return pair_idx, judge_label, result
-
-    results: dict[tuple[int, str], dict] = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_eval, t): t for t in tasks}
-        done = 0
-        for future in as_completed(futures):
-            pair_idx, judge_label, result = future.result()
-            results[(pair_idx, judge_label)] = result
-            done += 1
-            if done % 20 == 0 or done == n_tasks:
-                logger.info("[pairwise] %d/%d", done, n_tasks)
+    await asyncio.gather(*tasks)
 
     # Build output DataFrame
     df = df_baseline[["input", "expected_output"]].copy()

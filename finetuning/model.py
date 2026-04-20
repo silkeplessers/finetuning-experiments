@@ -6,6 +6,13 @@ def load_base_model(
     max_seq_length: int = 2048,
     load_in_4bit: bool = True,
 ):
+    """
+    Load a base language model using Unsloth.
+    Arguments:
+        model_name: Name or path of the base model to load.
+        max_seq_length: Maximum sequence length for the model.
+        load_in_4bit: Whether to load the model in 4-bit precision.
+    """
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_name,
         max_seq_length=max_seq_length,
@@ -19,7 +26,14 @@ def load_finetuned_model(
     max_seq_length: int = 2048,
     load_in_4bit: bool = True,
 ):
-    """Load a finetuned model directly via Unsloth — it resolves the base model from the adapter config."""
+    """
+    Load a finetuned model directly via Unsloth
+    It resolves the base model from the adapter config.
+    Arguments:
+        adapter_path: Path to the finetuned adapter.
+        max_seq_length: Maximum sequence length for the model.
+        load_in_4bit: Whether to load the model in 4-bit precision.
+    """
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=adapter_path,
         max_seq_length=max_seq_length,

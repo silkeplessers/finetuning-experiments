@@ -22,6 +22,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import logging
 import os
 import sys
@@ -89,7 +90,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
+async def main() -> None:
     args = parse_args()
     config = load_config(args.config)
 
@@ -129,7 +130,7 @@ def main() -> None:
         logger.info(
             "Running absolute evaluation (both judges) for %s ...", args.model_label
         )
-        df_scores = run_absolute_evaluation(df, client, judges, args.max_workers)
+        df_scores = await run_absolute_evaluation(df, client, judges, args.max_workers)
         save_row_scores(df_scores, storage, container, eval_prefix)
     else:
         logger.info("Reusing cached row scores from blob")
@@ -149,13 +150,13 @@ def main() -> None:
             logger.info(
                 "Baseline row scores not cached — running baseline evaluation first ..."
             )
-            df_baseline_scores = run_absolute_evaluation(
+            df_baseline_scores = await run_absolute_evaluation(
                 df_baseline, client, judges, args.max_workers
             )
             save_row_scores(df_baseline_scores, storage, container, baseline_prefix)
 
         logger.info("Running pairwise evaluation (both judges) ...")
-        df_pairwise = run_pairwise_evaluation(
+        df_pairwise = await run_pairwise_evaluation(
             df_baseline, df, client, judges, args.max_workers
         )
         save_row_scores(df_pairwise, storage, container, eval_prefix, "pairwise.jsonl")
@@ -184,4 +185,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
