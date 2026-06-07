@@ -9,9 +9,11 @@ Main evaluation CLI. Runs absolute scoring + pairwise comparison, saves results 
 ### Architecture
 
 - **2 API calls per row per judge** (absolute): Dutch quality (grammar, fluency, vocabulary, language mixing) + instruction following
-- **1 API call per row per judge** (pairwise): combined quality + instruction comparison with position randomisation
+- **2 API calls per row per judge** (pairwise): Dutch-quality comparison and instruction-following comparison are now issued as separate single-dimension calls (independent position randomisation each) to avoid halo effects.
 - **Structured outputs**: all judge calls use Pydantic response models via `client.beta.chat.completions.parse()`
 - **Parallel execution**: all (row × judge) tasks submitted to a single thread pool
+- **Deterministic position swap**: pairwise A/B layout is seeded per (pair_idx, dimension), so reruns are reproducible while still removing first-position bias on aggregate.
+- **Length-bias mitigation**: every judge prompt (absolute and pairwise) explicitly tells the judge to ignore response length and judge only on quality / coverage.
 - **Baseline caching**: baseline row-level scores are cached in blob and reused across experiments
 
 ### Prerequisites
@@ -56,7 +58,7 @@ python scripts/evaluation/run_evaluation.py \
 
 1. Loads `inference-results/{model_label}_results.jsonl` from blob (or `--local-results`).
 2. **Absolute scoring**: each row is scored by both judges in parallel — Dutch quality (grammar, fluency, vocabulary, language mixing) and instruction following, returning Pydantic-validated results with `j1_`/`j2_` prefixed columns.
-3. **Pairwise comparison** (finetuned only): each row is compared against the baseline response by both judges with randomised position (A/B swap) to remove order bias.
+3. **Pairwise comparison** (finetuned only): for each row, two independent single-dimension judge calls (Dutch quality + instruction following) are made by both judges, each with its own randomised A/B position derived deterministically from the pair index.
 4. **Aggregation**: per-judge and combined means, plus inter-judge agreement rate and Cohen's Kappa.
 5. **Charts**: per-judge score distributions, baseline-vs-finetuned bars, pairwise win charts, language mixing rates, and agreement heatmap.
 6. **Persistence**: row scores, pairwise results, aggregate JSON, and chart PNGs uploaded to blob under `eval-results/{model_label}/`.
@@ -104,5 +106,5 @@ streamlit run scripts/evaluation/dashboard.py
 |---|---|
 | `finetuning/evaluation.py` | Judge calls, parallel runners, aggregation, persistence, MLflow |
 | `finetuning/eval_visualization.py` | Per-judge charts + agreement heatmap generation |
-| `finetuning/judge_prompts.py` | System prompts (Dutch quality, instruction following, pairwise) |
-| `finetuning/schemas.py` | Pydantic response models (`DutchQualityResult`, `InstructionFollowingResult`, `PairwiseResult`) |
+| `finetuning/judge_prompts.py` | System prompts (Dutch quality, instruction following, pairwise quality, pairwise instruction) |
+| `finetuning/schemas.py` | Pydantic response models (`DutchQualityResult`, `InstructionFollowingResult`, `PairwiseSingleResult`) |

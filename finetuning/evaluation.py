@@ -31,12 +31,13 @@ from finetuning.blob_storage import (
 from finetuning.judge_prompts import (
     DUTCH_QUALITY_SYSTEM,
     INSTRUCTION_FOLLOWING_SYSTEM,
-    PAIRWISE_SYSTEM,
+    PAIRWISE_INSTRUCTION_SYSTEM,
+    PAIRWISE_QUALITY_SYSTEM,
 )
 from finetuning.schemas import (
     DutchQualityResult,
     InstructionFollowingResult,
-    PairwiseResult,
+    PairwiseSingleResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -130,12 +131,18 @@ def _build_pairwise_msg(
     prompt: str,
     response_a: str,
     response_b: str,
+    swap_seed: int,
 ) -> tuple[str, bool]:
     """Build pairwise user message. Returns (msg, swapped).
 
+    The A/B position is decided deterministically from ``swap_seed`` so that
+    repeated runs produce identical position assignments per row — making the
+    evaluation reproducible while still removing first-position bias on
+    aggregate.
+
     swapped=True means A=finetuned, B=baseline (position randomised).
     """
-    swapped = random.random() < 0.5
+    swapped = random.Random(swap_seed).random() < 0.5
     if swapped:
         a_text, b_text = response_b, response_a
     else:
@@ -158,25 +165,67 @@ def _map_winner(raw_winner: str, swapped: bool) -> str:
     return "finetuned"
 
 
+async def _evaluate_pairwise_single(
+    client,
+    model: str,
+    system_prompt: str,
+    prompt: str,
+    baseline_text: str,
+    finetuned_text: str,
+    swap_seed: int,
+) -> tuple[str, str]:
+    """One pairwise call for a single dimension. Returns (winner, justification)."""
+    user_msg, swapped = _build_pairwise_msg(
+        prompt, baseline_text, finetuned_text, swap_seed
+    )
+    result = await _judge_call(
+        client, model, system_prompt, user_msg, PairwiseSingleResult
+    )
+    return _map_winner(result.winner.value, swapped), result.justification
+
+
 async def evaluate_pairwise(
     client,
     model: str,
     prompt: str,
     baseline_text: str,
     finetuned_text: str,
+    seed: int,
 ) -> dict:
-    """Single pairwise call returning quality_winner + instruction_winner."""
-    user_msg, swapped = _build_pairwise_msg(
-        prompt, baseline_text, finetuned_text
-    )
-    result = await _judge_call(client, model, PAIRWISE_SYSTEM, user_msg, PairwiseResult)
-    return {
-        "pairwise_quality_winner": _map_winner(result.quality_winner.value, swapped),
-        "pairwise_quality_justification": result.quality_justification,
-        "pairwise_instruction_winner": _map_winner(
-            result.instruction_winner.value, swapped
+    """Two parallel pairwise calls (quality + instruction).
+
+    Each dimension is judged in its own API call with its own system prompt,
+    avoiding halo effects from combining both verdicts in one response.
+
+    Position randomisation is independent per dimension (different swap seeds)
+    so quality and instruction calls do not always see the same A/B layout, but
+    both are derived deterministically from ``seed`` for reproducibility.
+    """
+    (q_winner, q_just), (i_winner, i_just) = await asyncio.gather(
+        _evaluate_pairwise_single(
+            client,
+            model,
+            PAIRWISE_QUALITY_SYSTEM,
+            prompt,
+            baseline_text,
+            finetuned_text,
+            swap_seed=seed * 2,
         ),
-        "pairwise_instruction_justification": result.instruction_justification,
+        _evaluate_pairwise_single(
+            client,
+            model,
+            PAIRWISE_INSTRUCTION_SYSTEM,
+            prompt,
+            baseline_text,
+            finetuned_text,
+            swap_seed=seed * 2 + 1,
+        ),
+    )
+    return {
+        "pairwise_quality_winner": q_winner,
+        "pairwise_quality_justification": q_just,
+        "pairwise_instruction_winner": i_winner,
+        "pairwise_instruction_justification": i_just,
     }
 
 
@@ -293,6 +342,7 @@ async def run_pairwise_evaluation(
                 b_row["input"],
                 b_row["predicted_output"],
                 f_row["predicted_output"],
+                seed=pair_idx,
             )
         results[(pair_idx, judge_label)] = result
         done += 1

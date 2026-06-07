@@ -74,6 +74,11 @@ Flag cases like "however" instead of "echter", "because" instead of "omdat", \
 "features" instead of "functies", or English discourse markers ("so", \
 "basically", "actually") inserted into Dutch sentences.
 
+IMPORTANT — ignore length: do NOT let response length influence your scores. \
+A short response with high-quality Dutch must score the same as a long one \
+with equivalent quality. Judge the quality of the Dutch that IS produced, \
+not the amount of text.
+
 Reply with ONLY a JSON object (no markdown fences):
 {"grammar_score": <int 1-10>, "grammar_justification": "<one sentence>", \
 "fluency_score": <int 1-10>, "fluency_justification": "<one sentence>", \
@@ -138,40 +143,70 @@ search carefully to find them.
   9-10 = Fully correct, well-reasoned, and consistent throughout. For creative \
 tasks: coherent, plausible, and internally consistent.
 
+IMPORTANT — ignore length: do NOT reward verbosity for its own sake. A \
+concise response that fully addresses the instruction must score the same \
+as a longer one covering identical content. Only penalise brevity when it \
+causes genuinely missing required elements; do not penalise it when the \
+short response is complete. Equally, do not reward a longer response for \
+adding filler, repetition, or unrequested content.
+
 Reply with ONLY a JSON object (no markdown fences):
 {"instruction_following_score": <int 1-10>, "instruction_following_justification": "<one sentence>", \
 "correctness_score": <int 1-10>, "correctness_justification": "<one sentence>"}"""
 
-# ── Pairwise comparison (combined) ───────────────────────────────────────────
+# ── Pairwise comparison (split: one prompt per dimension) ────────────────────
 
-PAIRWISE_SYSTEM = """\
-You are an expert evaluator. You will receive an original prompt (in Dutch), \
+PAIRWISE_QUALITY_SYSTEM = """\
+You are an expert evaluator. You will receive an original prompt (in Dutch) \
 and TWO model responses labelled A and B.
 
 The labels A and B are assigned randomly and carry no significance. Do not \
 let label order influence your judgement.
 
-Compare the two responses on TWO criteria, evaluated INDEPENDENTLY. \
-Assess Dutch quality first while ignoring content. Then assess instruction \
-following separately while ignoring language quality.
+Compare the two responses ONLY on Dutch language quality (grammar, fluency, \
+vocabulary, naturalness). Do NOT consider content correctness or instruction \
+following — focus exclusively on the quality of the Dutch.
 
-If one response is not in Dutch at all, the other response wins on Dutch \
-quality automatically.
+Prefer the response with fewer unnatural calques, more idiomatic vocabulary, \
+and better grammatical correctness.
 
-1. **Dutch language quality** (grammar, fluency, vocabulary, naturalness). \
-   Do NOT consider content correctness — focus only on the quality of the Dutch. \
-   Prefer the response with fewer unnatural calques, more idiomatic vocabulary, \
-   and better grammatical correctness.
+If one response is not in Dutch at all, the other response wins automatically.
 
-2. **Instruction following** (faithfulness, completeness, accuracy relative \
-   to the prompt). Do NOT consider language quality here — focus only \
-   on how well the response addresses the prompt. Prefer the response that \
-   covers more of the required elements with greater accuracy.
+IMPORTANT — ignore length: do NOT prefer a response simply because it is \
+longer. Length alone is not a quality signal. Judge based on the quality of \
+the Dutch used, not the amount of text produced.
 
-For each criterion, state which response is better: A, B, or tie. \
-Choose tie if the difference is negligible and you would not confidently \
-prefer one over the other in a blind test.
+State which response is better: A, B, or tie. Choose tie if the difference \
+is negligible and you would not confidently prefer one over the other in a \
+blind test.
 
 Reply with ONLY a JSON object (no markdown fences):
-{"quality_winner": "<A, B, or tie>", "quality_justification": "<one sentence>", \
-"instruction_winner": "<A, B, or tie>", "instruction_justification": "<one sentence>"}"""
+{"winner": "<A, B, or tie>", "justification": "<one sentence>"}"""
+
+PAIRWISE_INSTRUCTION_SYSTEM = """\
+You are an expert evaluator. You will receive an original prompt (in Dutch) \
+and TWO model responses labelled A and B.
+
+The labels A and B are assigned randomly and carry no significance. Do not \
+let label order influence your judgement.
+
+Compare the two responses ONLY on instruction following (faithfulness, \
+completeness, and factual accuracy relative to the prompt). Do NOT consider \
+Dutch language quality (grammar, fluency, vocabulary) — focus exclusively on \
+how well the response addresses what was asked.
+
+Prefer the response that covers more of the required elements with greater \
+accuracy.
+
+IMPORTANT — ignore length: do NOT prefer a response simply because it is \
+longer or more detailed. A concise response that fully addresses the prompt \
+is as good as a longer one covering identical content. Only prefer a longer \
+response when the extra length adds required content; never prefer it for \
+filler, repetition, or unrequested elaboration.
+
+State which response is better: A, B, or tie. Choose tie if the difference \
+is negligible and you would not confidently prefer one over the other in a \
+blind test.
+
+Reply with ONLY a JSON object (no markdown fences):
+{"winner": "<A, B, or tie>", "justification": "<one sentence>"}"""

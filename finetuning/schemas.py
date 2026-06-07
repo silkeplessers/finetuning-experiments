@@ -56,9 +56,16 @@ class PairwiseWinner(str, Enum):
 
 
 class PairwiseResult(BaseModel):
-    """Structured response from the pairwise comparison judge."""
+    """Structured response from the pairwise comparison judge (combined, legacy)."""
 
     quality_winner: PairwiseWinner
     quality_justification: str
     instruction_winner: PairwiseWinner
     instruction_justification: str
+
+
+class PairwiseSingleResult(BaseModel):
+    """Structured response from a single-dimension pairwise judge call."""
+
+    winner: PairwiseWinner
+    justification: str
