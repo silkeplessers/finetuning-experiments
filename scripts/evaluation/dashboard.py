@@ -204,6 +204,13 @@ else:
 # ── Section 5: Pairwise win rates ────────────────────────────────────────────
 
 st.header("Pairwise Win Rates")
+st.caption(
+    "Two-run protocol: each pair is judged twice with A/B positions swapped. "
+    "A verdict only counts as a win when both runs agree; otherwise the pair "
+    "is resolved as a tie. Flip rate measures position bias (lower = better; "
+    "a flip rate above ~20% means the judge is largely deciding based on "
+    "position rather than content)."
+)
 
 pw_experiments = finetuned
 if not pw_experiments.empty:
@@ -220,6 +227,7 @@ if not pw_experiments.empty:
                 l = row.get(f"{prefix}_{dim}_loss")
                 if w is not None:
                     total = w + t + l
+                    flip = row.get(f"{prefix}_{dim}_flip_rate")
                     pw_data.append(
                         {
                             "Experiment": row["model_label"],
@@ -230,6 +238,9 @@ if not pw_experiments.empty:
                             "Win": int(w),
                             "Tie": int(t),
                             "Loss": int(l),
+                            "Flip %": (
+                                round(flip * 100, 1) if flip is not None else None
+                            ),
                         }
                     )
         if pw_data:
@@ -241,6 +252,57 @@ if not pw_experiments.empty:
             # Win rate chart
             win_chart = pw_df.pivot(index="Experiment", columns="Judge", values="Win %")
             st.bar_chart(win_chart, height=300)
+else:
+    st.info("No pairwise results (baseline-only).")
+
+
+# ── Section 5b: Position-bias flip rate ──────────────────────────────────────
+
+st.header("Position-Bias Flip Rate")
+st.caption(
+    "Fraction of pairs where the judge picked a different non-tie winner when "
+    "the A/B positions were swapped. Reported per judge per dimension. "
+    "Rule of thumb: <10% is good, 10–20% is acceptable, >20% means the judge "
+    "is unreliable for pairwise comparison on that dimension."
+)
+
+if not pw_experiments.empty:
+    flip_data = []
+    for _, row in pw_experiments.iterrows():
+        for prefix, jlabel in [("j1", "J1"), ("j2", "J2")]:
+            for dim, dim_label in [
+                ("pairwise_quality", "Language Quality"),
+                ("pairwise_instruction", "Instruction Following"),
+            ]:
+                flip = row.get(f"{prefix}_{dim}_flip_rate")
+                if flip is not None:
+                    flip_data.append(
+                        {
+                            "Experiment": row["model_label"],
+                            "Judge": jlabel,
+                            "Dimension": dim_label,
+                            "Flip %": round(flip * 100, 1),
+                        }
+                    )
+    if flip_data:
+        flip_df = pd.DataFrame(flip_data)
+        st.dataframe(
+            flip_df.set_index(["Experiment", "Judge", "Dimension"]),
+            use_container_width=True,
+        )
+        # One chart per dimension, judges side by side
+        for dim_label in ["Language Quality", "Instruction Following"]:
+            sub = flip_df[flip_df["Dimension"] == dim_label]
+            if sub.empty:
+                continue
+            st.markdown(f"**{dim_label}**")
+            chart = sub.pivot(index="Experiment", columns="Judge", values="Flip %")
+            st.bar_chart(chart, height=250)
+    else:
+        st.info(
+            "Flip rate not available — re-run pairwise evaluation with the "
+            "two-run swap protocol to populate this metric."
+        )
 else:
     st.info("No pairwise results (baseline-only).")
 
