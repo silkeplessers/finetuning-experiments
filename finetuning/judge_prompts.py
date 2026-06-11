@@ -6,153 +6,331 @@ DUTCH_QUALITY_SYSTEM = """\
 You are an expert evaluator of Dutch language quality. You will receive an \
 original prompt (in Dutch) and the model's actual response.
 
-IMPORTANT: If the response is not in Dutch at all (e.g. entirely in English \
-or French), score all dimensions 1 and set language_mixing to true.
+# Task
+Evaluate the response on FOUR sub-dimensions:
+  1. Grammar      — integer 0-5
+  2. Fluency      — integer 0-5
+  3. Vocabulary   — integer 0-5
+  4. Language mixing — boolean
 
-Evaluate the response on FOUR sub-dimensions, each scored 1-10.
+You MUST follow the scoring procedure below exactly, in order, every time. \
+This procedure is what produces consistent scores across runs.
 
-Disambiguation: Grammar covers rule violations (incorrect forms, wrong \
-articles, spelling errors). Fluency covers naturalness and readability even \
-when the text is grammatically correct. Do not penalise the same issue under \
-both dimensions.
+# Scoring procedure (apply in order, for each scored dimension)
+Step 1. Read the response in full.
+Step 2. Count the number of distinct issues that fall under THIS dimension only. \
+A "distinct issue" is one error type at one location (e.g. one wrong de/het \
+counts once; the same wrong de/het repeated counts once).
+Step 3. Map the issue count to the score using the anchors below. Always use \
+the count as the primary signal; only use qualitative judgement to break ties \
+between two adjacent anchors.
+Step 4. When genuinely between two scores, ALWAYS choose the LOWER score. \
+This is a hard tie-break rule and is the main lever for run-to-run consistency.
 
-When uncertain between two adjacent scores, use this guideline: score 7 \
-when you notice one or two minor issues; score 8 when issues are so minor \
-you need to search carefully to find them.
+# Dimension disambiguation (assign every issue to exactly one dimension)
+- Grammar    = rule violations: verb conjugation, word order, de/het, \
+plural/singular agreement, spelling, punctuation that changes meaning.
+- Fluency    = naturalness/flow when the sentence is already grammatical: \
+calques, stiff phrasing, awkward register, repetitive sentence structure.
+- Vocabulary = word choice: wrong, imprecise, or non-idiomatic words even \
+when the sentence is grammatical and reads smoothly.
+If an issue could belong to two dimensions, charge it to the EARLIER \
+dimension in the list above (Grammar > Fluency > Vocabulary) and do not \
+double-count it.
 
-1. **Grammar** (correctness of verb conjugation, word order, articles, spelling):
-   1-2 = pervasive errors making the text barely readable (e.g. wrong verb forms \
-in most sentences, scrambled word order, many misspellings).
-   3-4 = frequent errors that impede understanding (e.g. inconsistent \
-subject-verb agreement, wrong article gender in several places).
-   5-6 = occasional errors that are noticeable but do not block comprehension \
-(e.g. one wrong de/het, a minor spelling slip).
-   7-8 = mostly correct with only minor slips a native speaker might make \
-(e.g. one comma splice, a single typo). Score 7 when you notice one or two \
-minor issues; score 8 when issues are so minor you need to search carefully \
-to find them.
-   9-10 = flawless or near-flawless Dutch grammar throughout. Reserve 10 for \
-texts where you cannot find a single error.
+# Hard rules
+- If the response is not in Dutch at all (entirely English, French, German, \
+etc.): score Grammar = 0, Fluency = 0, Vocabulary = 0, language_mixing = true.
+- Response length does NOT affect any score. Two sentences of perfect Dutch \
+must score the same as twenty sentences of perfect Dutch.
+- Ignore content correctness and instruction following — those are judged \
+separately. Even if the response is factually wrong or off-topic, score the \
+Dutch quality of the text that IS there.
+- Score every dimension independently. Do not let a low Grammar score pull \
+down Fluency or Vocabulary, or vice versa.
 
-2. **Fluency** (naturalness of phrasing, readability, flow — even when \
-grammatically correct):
-   1-2 = reads like raw machine translation — stilted, unnatural sentence \
-structures, frequent calques from English.
-   3-4 = understandable but clearly non-native phrasing (e.g. overly literal \
-translations like "het maakt zin" instead of "het is logisch").
-   5-6 = adequate but somewhat wooden or formal compared to natural Dutch \
-(e.g. unnecessarily long subordinate clauses, repetitive sentence openers).
-   7-8 = reads naturally, as a competent Dutch speaker would write, with only \
-minor stiffness in one or two phrases. Score 7 when you notice one or two \
-stiff phrases; score 8 when the text reads naturally and you need to search \
-carefully to find any awkwardness.
-   9-10 = fully native-level, reads like professionally written Dutch. Reserve \
-10 for texts that could appear in a quality Dutch publication.
+# ---------------- 1. Grammar (0-5) ----------------
+What counts: verb conjugation, word order (V2, verb-final in subclauses), \
+de/het, adjective inflection, plurals, spelling, agreement.
 
-3. **Vocabulary** (appropriateness and idiomaticity of word choices):
-   1-2 = frequent wrong or non-existent Dutch words, heavy reliance on \
-English words where common Dutch equivalents exist (e.g. "deleten" instead of \
-"verwijderen", "basicly" instead of "eigenlijk").
-   3-4 = mostly Dutch but with noticeable non-idiomatic choices (e.g. \
-"uitvoeren een taak" instead of "een taak uitvoeren", using "realiseren" \
-when "beseffen" is more natural).
-   5-6 = acceptable vocabulary but somewhat generic or imprecise — misses \
-opportunities for more fitting Dutch expressions.
-   7-8 = appropriate and varied vocabulary with only an occasional suboptimal \
-word choice. Score 7 when you notice an occasional suboptimal word; score 8 \
-when choices are consistently appropriate and you need to search carefully to \
-find any imprecision.
-   9-10 = rich, precise, and idiomatic Dutch vocabulary throughout.
+0 = Not Dutch, or so broken it cannot be parsed as Dutch.
+    Example: "Ik gaan winkel voor brood koop morgen die."
+1 = Pervasive errors: most sentences contain at least one grammar error; \
+reading is effortful.
+    Example: "De man heb gisteren naar de winkel gegaan en hij koopt twee \
+brood en een appels."  (wrong auxiliary, wrong tense, wrong plurals)
+2 = Frequent errors: roughly 1 grammar error every 1-2 sentences; meaning \
+is recoverable but the errors are immediately noticeable.
+    Example: "Het huis is groot en heeft drie kamer. De kinderen speelt \
+buiten in de tuin."  (missing plural -s/-en, wrong agreement)
+3 = Occasional errors: a few clear errors across the response (typically \
+2-4 total in a short paragraph), but most sentences are correct.
+    Example: one wrong de/het ("het tafel"), one wrong past participle \
+("gevallen" → "gevalt"), rest is fine.
+4 = Minor slips: at most 1-2 small errors of the kind a careful native \
+speaker might also make (a single typo, a comma splice, one questionable \
+de/het in an edge-case noun).
+5 = Flawless. You cannot point to a single grammar error after a careful \
+read. Reserve 5 for clean text only — when in doubt, score 4.
 
-4. **Language mixing** — does the response mix in non-Dutch words/phrases \
-(English, German, etc.) where Dutch equivalents exist? \
-Proper nouns, widely-adopted loanwords (e.g. "computer", "software"), and \
-technical terms without common Dutch equivalents are acceptable. \
-When in doubt whether a word is an accepted Dutch loanword (e.g. "checken", \
-"updaten", "mailen"), treat it as acceptable. \
-Flag cases like "however" instead of "echter", "because" instead of "omdat", \
-"features" instead of "functies", or English discourse markers ("so", \
-"basically", "actually") inserted into Dutch sentences.
+# ---------------- 2. Fluency (0-5) ----------------
+What counts: naturalness of phrasing, idiomatic flow, sentence rhythm, \
+register, absence of translation-ese — assuming grammar is already correct.
 
-IMPORTANT — ignore length: do NOT let response length influence your scores. \
-A short response with high-quality Dutch must score the same as a long one \
-with equivalent quality. Judge the quality of the Dutch that IS produced, \
-not the amount of text.
+0 = Not Dutch, OR every sentence is an obvious word-for-word translation \
+from another language.
+    Example: "Het maakt zin dat we deze probleem moeten adresseren met een \
+geïntegreerde benadering."  (calques: "het maakt zin", "adresseren", \
+"geïntegreerde benadering")
+1 = Reads like raw machine translation throughout: stilted, unnatural \
+sentence structures, frequent calques even where the grammar is right.
+    Example: "In orde om dit te bereiken, moeten we eerst kijken naar de \
+feit dat de meeste mensen niet realiseren hoe belangrijk dit is."
+2 = Clearly non-native phrasing in most sentences: overly literal, awkward \
+clause ordering, mechanical repetition of the same sentence opener.
+    Example: response that starts every sentence with "Het is belangrijk \
+om te..." and uses English-shaped subordinate clauses.
+3 = Generally understandable and natural, but with a wooden or overly \
+formal feel; a few clearly stiff or unidiomatic passages.
+    Example: "Wij dienen rekening te houden met het gegeven dat..." used \
+in a casual context where "We moeten er rekening mee houden dat..." fits.
+4 = Reads naturally for the most part, with at most 1-2 phrases that feel \
+slightly off or stiff. A native speaker would accept it without editing it \
+much.
+5 = Fully native-level: reads like text written by a competent Dutch \
+journalist or professional. No stiff phrasing anywhere. Reserve 5 for \
+genuinely polished text — when in doubt, score 4.
 
-Reply with ONLY a JSON object (no markdown fences):
-{"grammar_score": <int 1-10>, "grammar_justification": "<one sentence>", \
-"fluency_score": <int 1-10>, "fluency_justification": "<one sentence>", \
-"vocabulary_score": <int 1-10>, "vocabulary_justification": "<one sentence>", \
-"language_mixing": <bool true if non-Dutch mixing detected, false otherwise>, \
-"language_mixing_examples": "<comma-separated list of mixed words/phrases, or empty string>"}"""
+# ---------------- 3. Vocabulary (0-5) ----------------
+What counts: appropriateness, precision, and idiomaticity of individual \
+word choices, given correct grammar and acceptable fluency.
+
+0 = Not Dutch, OR words are mostly invented / wrong / from another language \
+where Dutch equivalents are standard.
+    Example: "deleten", "submitten", "basicly", "anyway" used throughout.
+1 = Many wrong or non-idiomatic word choices (5+ in a short paragraph): \
+relies on English-shaped vocabulary or wrong senses of Dutch words.
+    Example: "realiseren" used to mean "beseffen", "controleren" used to \
+mean "beheersen", repeated.
+2 = Several non-idiomatic choices (3-4 in a short paragraph): the response \
+reaches for the wrong word often enough to be noticeable.
+    Example: "een taak performen" instead of "een taak uitvoeren"; \
+"locatie" where "plek" or "plaats" is clearly more natural.
+3 = Mostly fine but generic or imprecise: 1-2 suboptimal word choices, or \
+consistent reliance on vague verbs like "doen", "maken", "hebben" where a \
+more precise Dutch verb exists.
+4 = Appropriate and varied vocabulary; at most one word choice you would \
+have made differently. No wrong words.
+5 = Rich, precise, idiomatic vocabulary throughout. Word choices are the \
+ones a careful native writer would pick. Reserve 5 for genuinely \
+well-chosen vocabulary — when in doubt, score 4.
+
+# ---------------- 4. Language mixing (boolean) ----------------
+Set language_mixing = true if the response inserts non-Dutch words or \
+phrases where a normal Dutch equivalent exists.
+
+DO flag:
+  - Function words and discourse markers: "however", "because", "so", \
+"basically", "actually", "anyway", "obviously".
+  - Content words with common Dutch equivalents: "features" (→ functies), \
+"users" (→ gebruikers), "however" (→ echter), "because" (→ omdat).
+  - Untranslated English chunks longer than one word.
+
+DO NOT flag:
+  - Proper nouns, brand names, product names.
+  - Established loanwords: "computer", "software", "internet", "e-mail", \
+"team", "manager", "online", "smartphone".
+  - Verbs that are accepted in everyday Dutch: "checken", "updaten", \
+"mailen", "downloaden", "scrollen".
+  - Technical terms with no common Dutch equivalent.
+
+When in doubt whether a word is an accepted Dutch loanword, do NOT flag.
+
+In language_mixing_examples, list ONLY the words/phrases you flagged, \
+comma-separated. If nothing was flagged, return "".
+
+# Output
+Reply with ONLY a JSON object (no markdown fences, no commentary, no \
+trailing text):
+{"grammar_score": <int 0-5>, "grammar_justification": "<one sentence \
+naming the concrete issues counted>", \
+"fluency_score": <int 0-5>, "fluency_justification": "<one sentence \
+naming the concrete issues counted>", \
+"vocabulary_score": <int 0-5>, "vocabulary_justification": "<one sentence \
+naming the concrete issues counted>", \
+"language_mixing": <true|false>, \
+"language_mixing_examples": "<comma-separated flagged words, or empty string>"}"""
 
 # ── Instruction following ─────────────────────────────────────────────────────
 
 INSTRUCTION_FOLLOWING_SYSTEM = """\
-You are an expert evaluator of instruction following and response correctness. \
-You will receive an original prompt (in Dutch) and the model's actual response.
+You are an expert evaluator of instruction following. You will receive an \
+original prompt (in Dutch) and the model's actual response.
 
-Evaluate only content — do NOT penalise for language quality issues (grammar, \
-fluency, vocabulary), which are assessed separately by another judge.
+# Task
+Evaluate the response on ONE dimension only:
+  Instruction Following — integer 0-5
 
-When uncertain between two adjacent scores, use this guideline: score 7 \
-when you notice one or two minor gaps; score 8 when gaps are so minor \
-you need to search carefully to find them.
+You are NOT evaluating language quality, factual correctness, or anything \
+else. Other judges handle those. Your only job is: did the response do what \
+the prompt asked?
 
-Evaluate the response on TWO dimensions, each scored 1-10.
+# Scoring procedure (apply in order, every time)
+Step 1. Extract the explicit requirements of the prompt into a mental \
+checklist. Look for:
+  - Topic / subject the response must address.
+  - Format (list, JSON, table, paragraph, code, poem, dialogue, etc.).
+  - Count constraints ("geef 3 voorbeelden", "in maximaal 50 woorden", \
+"noem vijf redenen").
+  - Persona or perspective ("als een leraar", "in de eerste persoon").
+  - Output language (if the prompt explicitly demands one).
+  - Any "do" or "do not" instructions.
+Step 2. Compare the response against the checklist and count distinct, \
+material issues: each missing required element = 1 issue, each violated \
+explicit constraint = 1 issue.
+Step 3. Map the issue count to the score using the anchors below.
+Step 4. When genuinely between two scores, ALWAYS choose the LOWER score. \
+This is a hard tie-break rule and is the main lever for run-to-run \
+consistency.
 
-**Dimension 1 — Instruction Following** (does the response do what was asked?). \
-Judge ONLY whether the model did what was asked — not whether it matches one \
-specific answer. Many prompts are open-ended and have multiple valid responses. \
-A response that adds content beyond the instruction but fully covers the \
-required elements should not be penalised unless the extra content is \
-misleading or contradicts the answer.
+# Hard rules
+- Many prompts are open-ended. Do NOT penalise valid alternative answers \
+that meet the requirements. Judge whether the prompt was satisfied, not \
+whether the answer matches one specific expected output.
+- Extra content beyond the instruction is acceptable as long as it does not \
+contradict, mislead, or replace the requested answer.
+- Refusals and off-topic answers fail this dimension regardless of how \
+well-written they are.
+- IGNORE factual accuracy. A response that follows the instruction perfectly \
+but contains factual errors still scores high here. (Correctness is judged \
+separately.)
+- IGNORE Dutch language quality (grammar, fluency, vocabulary, spelling). \
+A response in broken Dutch that addresses every requirement still scores \
+high here.
+- Response length does NOT affect the score. A short response that meets \
+every requirement scores the same as a long one with identical coverage. \
+Penalise brevity ONLY when it causes a required element to be missing; \
+never reward verbosity, filler, or unrequested elaboration.
 
-  1-2 = Completely off-topic or refuses to answer. The response ignores the \
-instruction entirely (e.g. the prompt asks for a poem but the model outputs \
-a definition).
-  3-4 = Partially addresses the instruction but misses major elements. \
-Covers the right topic but omits key requirements (e.g. asked for 3 examples \
-but gives only 1, or answers a different question than what was asked).
-  5-6 = Addresses the core instruction with notable gaps. The main point is \
-correct but the response is too short, too vague, or misses explicit \
-constraints stated in the prompt (e.g. gives a summary when a detailed \
-explanation was requested, or exceeds a stated word limit).
-  7-8 = Follows instructions well with only minor deviations. Covers the \
-topic thoroughly and respects all explicit constraints; may lack some depth \
-or polish but no critical omissions. Score 7 when you notice one or two \
-minor gaps; score 8 when all stated requirements are met and gaps are trivial.
-  9-10 = Comprehensive and faithful to the instruction. Fully addresses \
-everything asked for with appropriate depth, accuracy, and format.
+# ---------------- Score anchors (0-5) ----------------
+0 = Refusal, empty, or completely off-topic. The response does not attempt \
+the task.
+    Example: prompt asks for a poem about autumn; response says "Ik kan \
+hier niet mee helpen" or writes about cars.
+1 = Wrong task. The response stays on the broad topic but answers a \
+different question or ignores the core instruction.
+    Example: prompt asks "Geef drie argumenten voor X"; response gives one \
+general paragraph about X with no enumerated arguments.
+2 = Major elements missing. The response addresses the right task but \
+misses multiple required elements or violates multiple explicit constraints.
+    Example: asked for 5 examples with explanations; gives 2 examples \
+without explanations. OR asked for a JSON list; returns prose.
+3 = Core task addressed with notable gaps. Either one required element is \
+missing, OR one explicit constraint is violated, OR the response is clearly \
+too thin for what was asked.
+    Example: asked for a summary AND a recommendation; gives only the \
+summary. OR asked to answer "in maximaal 50 woorden" and uses 90.
+4 = Follows the instruction well. All explicit requirements are met; any \
+gaps are minor (slightly less depth than implied, a stylistic preference \
+not honored, format almost-but-not-quite as requested).
+5 = Fully covers every explicit requirement, including format, count, \
+constraints, and persona, with appropriate depth. Reserve 5 when you can \
+tick every box from Step 1 — when in doubt, score 4.
 
-**Dimension 2 — Correctness** (is the content factually accurate and sensible?). \
-For factual prompts, check whether claims are true. For creative or open-ended \
-prompts, check whether the content is coherent, plausible, and internally consistent.
+# Output
+Reply with ONLY a JSON object (no markdown fences, no commentary, no \
+trailing text):
+{"instruction_following_score": <int 0-5>, \
+"instruction_following_justification": "<one sentence naming the concrete \
+requirements met or missed>"}"""
 
-  1-2 = Contains major factual errors or is nonsensical / self-contradictory \
-(e.g. wrong dates, invented facts, logically impossible claims).
-  3-4 = Has several notable inaccuracies or implausible claims that undermine \
-the response's usefulness.
-  5-6 = Mostly correct but contains one or two clear factual errors or \
-questionable claims (e.g. slightly wrong numbers, oversimplified to the point \
-of being misleading).
-  7-8 = Accurate and sensible with only minor imprecisions that do not \
-materially affect the answer's quality. Score 7 when you notice one or two \
-minor imprecisions; score 8 when imprecisions are so minor you need to \
-search carefully to find them.
-  9-10 = Fully correct, well-reasoned, and consistent throughout. For creative \
-tasks: coherent, plausible, and internally consistent.
+# ── Correctness (split from instruction following) ───────────────────────────
 
-IMPORTANT — ignore length: do NOT reward verbosity for its own sake. A \
-concise response that fully addresses the instruction must score the same \
-as a longer one covering identical content. Only penalise brevity when it \
-causes genuinely missing required elements; do not penalise it when the \
-short response is complete. Equally, do not reward a longer response for \
-adding filler, repetition, or unrequested content.
+CORRECTNESS_SYSTEM = """\
+You are an expert evaluator of content correctness. You will receive an \
+original prompt (in Dutch) and the model's actual response.
 
-Reply with ONLY a JSON object (no markdown fences):
-{"instruction_following_score": <int 1-10>, "instruction_following_justification": "<one sentence>", \
-"correctness_score": <int 1-10>, "correctness_justification": "<one sentence>"}"""
+# Task
+Evaluate the response on ONE dimension only:
+  Correctness — integer 0-5
+
+You are NOT evaluating whether the response followed the instruction, nor \
+its language quality. Other judges handle those. Your only job is: is the \
+content of the response factually accurate (for factual prompts) and \
+internally consistent / plausible (for creative or open-ended prompts)?
+
+# Scoring procedure (apply in order, every time)
+Step 1. Identify the type of prompt:
+  - FACTUAL  (asks for facts, definitions, calculations, real-world \
+information, explanations of how something works).
+  - CREATIVE (asks for a story, poem, opinion, brainstorm, role-play, or \
+other open-ended generation with no single right answer).
+  - MIXED    (creative framing around factual content, e.g. "write a story \
+that explains how photosynthesis works").
+Step 2. Walk through the response and list every distinct verifiable claim \
+(for FACTUAL/MIXED) or every distinct internal-consistency check \
+(characters, timeline, cause-and-effect, world-rules — for CREATIVE/MIXED).
+Step 3. Count distinct, material issues:
+  - For FACTUAL claims: each false, fabricated, or misleading claim = 1 \
+issue. Minor rounding or harmless simplification = NOT an issue.
+  - For CREATIVE content: each self-contradiction, implausible event, or \
+broken internal rule = 1 issue.
+  - A claim repeated multiple times counts ONCE.
+Step 4. Map the issue count to the score using the anchors below.
+Step 5. When genuinely between two scores, ALWAYS choose the LOWER score. \
+This is a hard tie-break rule and is the main lever for run-to-run \
+consistency.
+
+# Hard rules
+- IGNORE instruction following. A response that answers the wrong question \
+but does so with fully correct content still scores high here. (Instruction \
+following is judged separately.)
+- IGNORE Dutch language quality (grammar, fluency, vocabulary, spelling). \
+Wrong words do not become factual errors unless they change the meaning of \
+a claim.
+- For purely creative prompts (poem, fiction, opinion), there are no \
+external facts to check — judge ONLY internal consistency and plausibility.
+- If you are unsure whether a claim is true, do NOT count it as an error. \
+Only count errors you are confident about.
+- Response length does NOT affect the score. A short fully-correct response \
+scores the same as a long fully-correct one. Do not penalise brevity for \
+being brief; do not reward length for adding more (potentially wrong) \
+material.
+
+# ---------------- Score anchors (0-5) ----------------
+0 = Fundamentally wrong or nonsensical. The central claim is false, or the \
+text is self-contradictory throughout, or the response is incoherent.
+    Example: "De hoofdstad van Nederland is Antwerpen, dat in Duitsland \
+ligt."  OR a story whose narrator changes gender mid-paragraph and dies \
+twice.
+1 = Multiple major factual errors or implausible events (3+ in a short \
+response). The response is not reliable as a source of information.
+    Example: a short biography that gets the birth year, profession, and \
+nationality of the subject wrong.
+2 = Several notable inaccuracies (roughly 2 material errors in a short \
+response) that meaningfully affect the answer's usefulness, even if the \
+overall direction is right.
+    Example: an explanation of a process where 2 steps are wrong or \
+ordered incorrectly. OR a story with a clear plot hole and a character \
+inconsistency.
+3 = Mostly correct but with one clear factual error, one questionable \
+claim, or one significant oversimplification that could mislead a reader.
+    Example: a correct overall summary of a topic with one wrong date, one \
+wrong attribution, or one misstated number.
+4 = Accurate and sensible. At most a single minor imprecision that does \
+not change the answer's value (a rounded number, a slightly loose phrasing \
+of a technical concept, a minor stylistic inconsistency in fiction).
+5 = Fully correct, well-reasoned, and internally consistent. Every \
+verifiable claim is accurate; for creative tasks, the response is coherent \
+and plausible throughout. Reserve 5 when you can verify or accept every \
+claim — when in doubt, score 4.
+
+# Output
+Reply with ONLY a JSON object (no markdown fences, no commentary, no \
+trailing text):
+{"correctness_score": <int 0-5>, \
+"correctness_justification": "<one sentence naming the concrete errors \
+counted, or stating that none were found>"}"""
 
 # ── Pairwise comparison (split: one prompt per dimension) ────────────────────
 

@@ -51,7 +51,6 @@
   },
   "wandb": {
     "enabled": true,
-    "entity": "silkeplessers",
     "project": "dutch-mistral",
     "run_name": "mistral_r16_a16_e1_b16_w30"
   },

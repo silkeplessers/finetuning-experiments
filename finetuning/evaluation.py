@@ -2,8 +2,12 @@
 
 Design:
   - Both JUDGE_LLM_1 and JUDGE_LLM_2 score every row (columns prefixed j1_/j2_).
-  - 2 API calls per row per judge: dutch_quality (merged) + instruction_following.
-  - 1 pairwise API call per row per judge (quality + instruction in one prompt).
+  - 3 API calls per row per judge: dutch_quality (merged) + instruction_following + correctness.
+  - 4 pairwise API calls per row per judge: 2 dimensions × 2 position orderings
+    (two-run swap protocol). Verdicts only count when both orderings agree;
+    otherwise the pair is resolved as a tie. The flip rate (fraction of pairs
+    where the two orderings disagree on a non-tie winner) is logged per judge
+    as a direct measurement of position bias.
   - All judge calls use structured outputs (Pydantic response models) — no regex parsing.
   - Both judges run in parallel (row × judge tasks submitted to a single thread pool).
   - Baseline row-level scores are cached and reused across experiments.
@@ -15,7 +19,6 @@ Design:
 import asyncio
 import json
 import logging
-import random
 import tempfile
 from pathlib import Path
 
@@ -29,12 +32,14 @@ from finetuning.blob_storage import (
     upload_file_to_blob,
 )
 from finetuning.judge_prompts import (
+    CORRECTNESS_SYSTEM,
     DUTCH_QUALITY_SYSTEM,
     INSTRUCTION_FOLLOWING_SYSTEM,
     PAIRWISE_INSTRUCTION_SYSTEM,
     PAIRWISE_QUALITY_SYSTEM,
 )
 from finetuning.schemas import (
+    CorrectnessResult,
     DutchQualityResult,
     InstructionFollowingResult,
     PairwiseSingleResult,
@@ -113,15 +118,41 @@ async def evaluate_instruction_following(
     )
 
 
+async def evaluate_correctness(
+    client, model: str, prompt: str, response_text: str
+) -> CorrectnessResult:
+    user_msg = (
+        f"Prompt:\n{prompt}\n\n"
+        f"Model response:\n{response_text}"
+    )
+    return await _judge_call(
+        client,
+        model,
+        CORRECTNESS_SYSTEM,
+        user_msg,
+        CorrectnessResult,
+    )
+
+
 async def evaluate_row(
     client, model: str, prompt: str, response_text: str
 ) -> dict:
-    """2 API calls in parallel: dutch_quality + instruction_following. Returns flat dict."""
-    quality, instruction = await asyncio.gather(
+    """3 API calls in parallel: dutch_quality + instruction_following + correctness.
+
+    Instruction following and correctness are scored by separate judge calls
+    (single-focus rubrics) to avoid halo effects between the two dimensions.
+    Returns a flat dict merging all three structured responses.
+    """
+    quality, instruction, correctness = await asyncio.gather(
         evaluate_dutch_quality(client, model, prompt, response_text),
         evaluate_instruction_following(client, model, prompt, response_text),
+        evaluate_correctness(client, model, prompt, response_text),
     )
-    return {**quality.model_dump(), **instruction.model_dump()}
+    return {
+        **quality.model_dump(),
+        **instruction.model_dump(),
+        **correctness.model_dump(),
+    }
 
 
 # ── Pairwise ──────────────────────────────────────────────────────────────────
@@ -129,40 +160,51 @@ async def evaluate_row(
 
 def _build_pairwise_msg(
     prompt: str,
-    response_a: str,
-    response_b: str,
-    swap_seed: int,
-) -> tuple[str, bool]:
-    """Build pairwise user message. Returns (msg, swapped).
+    baseline_text: str,
+    finetuned_text: str,
+    swapped: bool,
+) -> str:
+    """Build pairwise user message with an explicit A/B orientation.
 
-    The A/B position is decided deterministically from ``swap_seed`` so that
-    repeated runs produce identical position assignments per row — making the
-    evaluation reproducible while still removing first-position bias on
-    aggregate.
-
-    swapped=True means A=finetuned, B=baseline (position randomised).
+    swapped=False -> A=baseline,  B=finetuned
+    swapped=True  -> A=finetuned, B=baseline
     """
-    swapped = random.Random(swap_seed).random() < 0.5
     if swapped:
-        a_text, b_text = response_b, response_a
+        a_text, b_text = finetuned_text, baseline_text
     else:
-        a_text, b_text = response_a, response_b
+        a_text, b_text = baseline_text, finetuned_text
     parts = [
         f"Prompt:\n{prompt}",
         f"Response A:\n{a_text}",
         f"Response B:\n{b_text}",
     ]
-    return "\n\n".join(parts), swapped
+    return "\n\n".join(parts)
 
 
 def _map_winner(raw_winner: str, swapped: bool) -> str:
-    """Map A/B/tie back to baseline/finetuned/tie."""
+    """Map raw A/B/tie verdict back to baseline/finetuned/tie."""
     w = raw_winner.strip().upper()
     if w == "TIE":
         return "tie"
     if (w == "A" and not swapped) or (w == "B" and swapped):
         return "baseline"
     return "finetuned"
+
+
+def _resolve_two_run(verdict_ab: str, verdict_ba: str) -> tuple[str, bool]:
+    """Combine two-run verdicts using the 'both must agree, else tie' rule.
+
+    Returns (resolved_winner, flipped) where ``flipped`` is True only when
+    the two runs picked different non-tie winners (a position-bias flip).
+    Disagreements involving a 'tie' verdict are conservatively resolved as
+    tie but NOT counted as flips.
+    """
+    if verdict_ab == verdict_ba:
+        return verdict_ab, False
+    if verdict_ab == "tie" or verdict_ba == "tie":
+        return "tie", False
+    # Both non-tie but disagree -> position flip
+    return "tie", True
 
 
 async def _evaluate_pairwise_single(
@@ -172,16 +214,64 @@ async def _evaluate_pairwise_single(
     prompt: str,
     baseline_text: str,
     finetuned_text: str,
-    swap_seed: int,
+    swapped: bool,
 ) -> tuple[str, str]:
-    """One pairwise call for a single dimension. Returns (winner, justification)."""
-    user_msg, swapped = _build_pairwise_msg(
-        prompt, baseline_text, finetuned_text, swap_seed
+    """One pairwise call for a single dimension at a fixed A/B orientation.
+
+    Returns (winner_in_baseline_finetuned_tie, justification).
+    """
+    user_msg = _build_pairwise_msg(
+        prompt, baseline_text, finetuned_text, swapped
     )
     result = await _judge_call(
         client, model, system_prompt, user_msg, PairwiseSingleResult
     )
     return _map_winner(result.winner.value, swapped), result.justification
+
+
+async def _evaluate_pairwise_dimension(
+    client,
+    model: str,
+    system_prompt: str,
+    prompt: str,
+    baseline_text: str,
+    finetuned_text: str,
+) -> dict:
+    """Two-run pairwise for ONE dimension (baseline=A, then finetuned=A).
+
+    Runs both orderings in parallel and resolves with the 'both must agree,
+    else tie' rule. Returns a flat dict with the resolved winner, the two raw
+    verdicts, both justifications, and a per-row ``flipped`` flag.
+    """
+    (w_ab, j_ab), (w_ba, j_ba) = await asyncio.gather(
+        _evaluate_pairwise_single(
+            client,
+            model,
+            system_prompt,
+            prompt,
+            baseline_text,
+            finetuned_text,
+            swapped=False,
+        ),
+        _evaluate_pairwise_single(
+            client,
+            model,
+            system_prompt,
+            prompt,
+            baseline_text,
+            finetuned_text,
+            swapped=True,
+        ),
+    )
+    resolved, flipped = _resolve_two_run(w_ab, w_ba)
+    return {
+        "winner": resolved,
+        "winner_ab": w_ab,
+        "winner_ba": w_ba,
+        "justification_ab": j_ab,
+        "justification_ba": j_ba,
+        "flipped": flipped,
+    }
 
 
 async def evaluate_pairwise(
@@ -190,42 +280,47 @@ async def evaluate_pairwise(
     prompt: str,
     baseline_text: str,
     finetuned_text: str,
-    seed: int,
+    seed: int = 0,  # kept for backward-compat with run_pairwise_evaluation; unused
 ) -> dict:
-    """Two parallel pairwise calls (quality + instruction).
+    """Four parallel pairwise calls (2 dimensions × 2 position orderings).
 
-    Each dimension is judged in its own API call with its own system prompt,
-    avoiding halo effects from combining both verdicts in one response.
-
-    Position randomisation is independent per dimension (different swap seeds)
-    so quality and instruction calls do not always see the same A/B layout, but
-    both are derived deterministically from ``seed`` for reproducibility.
+    Each dimension is judged in its own single-focus prompt (avoiding halo
+    between dimensions) AND in both A/B orientations (avoiding position bias).
+    A verdict counts as a win only when both orderings agree; otherwise the
+    pair is resolved as a tie and marked as a position flip.
     """
-    (q_winner, q_just), (i_winner, i_just) = await asyncio.gather(
-        _evaluate_pairwise_single(
+    del seed  # no longer used; orientation is now forced rather than randomised
+    quality_res, instruction_res = await asyncio.gather(
+        _evaluate_pairwise_dimension(
             client,
             model,
             PAIRWISE_QUALITY_SYSTEM,
             prompt,
             baseline_text,
             finetuned_text,
-            swap_seed=seed * 2,
         ),
-        _evaluate_pairwise_single(
+        _evaluate_pairwise_dimension(
             client,
             model,
             PAIRWISE_INSTRUCTION_SYSTEM,
             prompt,
             baseline_text,
             finetuned_text,
-            swap_seed=seed * 2 + 1,
         ),
     )
     return {
-        "pairwise_quality_winner": q_winner,
-        "pairwise_quality_justification": q_just,
-        "pairwise_instruction_winner": i_winner,
-        "pairwise_instruction_justification": i_just,
+        "pairwise_quality_winner": quality_res["winner"],
+        "pairwise_quality_winner_ab": quality_res["winner_ab"],
+        "pairwise_quality_winner_ba": quality_res["winner_ba"],
+        "pairwise_quality_justification_ab": quality_res["justification_ab"],
+        "pairwise_quality_justification_ba": quality_res["justification_ba"],
+        "pairwise_quality_flipped": quality_res["flipped"],
+        "pairwise_instruction_winner": instruction_res["winner"],
+        "pairwise_instruction_winner_ab": instruction_res["winner_ab"],
+        "pairwise_instruction_winner_ba": instruction_res["winner_ba"],
+        "pairwise_instruction_justification_ab": instruction_res["justification_ab"],
+        "pairwise_instruction_justification_ba": instruction_res["justification_ba"],
+        "pairwise_instruction_flipped": instruction_res["flipped"],
     }
 
 
@@ -275,9 +370,9 @@ async def run_absolute_evaluation(
         judges: list of (judge_label, judge_model) e.g. [("j1", "gpt-5"), ("j2", "grok-4")].
         max_workers: max concurrent API calls (controlled via asyncio.Semaphore).
 
-    Each row's 2 judge calls (dutch_quality + instruction_following) also run in
-    parallel within evaluate_row via asyncio.gather, so effective concurrency is
-    up to 2× max_workers API calls in flight.
+    Each row's 3 judge calls (dutch_quality + instruction_following + correctness)
+    also run in parallel within evaluate_row via asyncio.gather, so effective
+    concurrency is up to 3× max_workers API calls in flight.
     """
     rows = list(df.iterrows())
     n_tasks = len(rows) * len(judges)
@@ -310,8 +405,10 @@ async def run_absolute_evaluation(
     # Build output DataFrame
     df = df.copy()
     for jl, _ in judges:
-        keys = list(DutchQualityResult.model_fields) + list(
-            InstructionFollowingResult.model_fields
+        keys = (
+            list(DutchQualityResult.model_fields)
+            + list(InstructionFollowingResult.model_fields)
+            + list(CorrectnessResult.model_fields)
         )
         for key in keys:
             df[f"{jl}_{key}"] = [results[(i, jl)].get(key) for i in range(len(rows))]
@@ -325,7 +422,13 @@ async def run_pairwise_evaluation(
     judges: list[tuple[str, str]],
     max_workers: int = 8,
 ) -> pd.DataFrame:
-    """Run pairwise comparison with all judges in parallel (async)."""
+    """Run pairwise comparison with all judges in parallel (async).
+
+    Uses a two-run swap protocol: each (dimension, judge) pair issues 2 calls
+    (baseline=A then finetuned=A), and the verdict only counts as a win when
+    both orderings agree. Total API calls per row per judge = 2 dimensions ×
+    2 orderings = 4.
+    """
     pairs = list(zip(df_baseline.iterrows(), df_finetuned.iterrows()))
     n_tasks = len(pairs) * len(judges)
     sem = asyncio.Semaphore(max_workers)
@@ -362,9 +465,17 @@ async def run_pairwise_evaluation(
     df["finetuned_output"] = df_finetuned["predicted_output"].values
     pairwise_cols = [
         "pairwise_quality_winner",
-        "pairwise_quality_justification",
+        "pairwise_quality_winner_ab",
+        "pairwise_quality_winner_ba",
+        "pairwise_quality_justification_ab",
+        "pairwise_quality_justification_ba",
+        "pairwise_quality_flipped",
         "pairwise_instruction_winner",
-        "pairwise_instruction_justification",
+        "pairwise_instruction_winner_ab",
+        "pairwise_instruction_winner_ba",
+        "pairwise_instruction_justification_ab",
+        "pairwise_instruction_justification_ba",
+        "pairwise_instruction_flipped",
     ]
     for jl, _ in judges:
         for key in pairwise_cols:
@@ -470,6 +581,17 @@ def _compute_judge_aggregate(
             agg[f"{prefix}_{short}_win_rate"] = (
                 round(agg[f"{prefix}_{short}_win"] / n, 3) if n > 0 else None
             )
+
+            # Position-bias flip rate: fraction of pairs where the two A/B
+            # orderings disagreed on a non-tie winner (lower is better).
+            flip_col = f"{prefix}_{short}_flipped"
+            if flip_col in df_pairwise.columns:
+                flipped = df_pairwise[flip_col].apply(
+                    lambda x: x is True or str(x).lower() == "true"
+                )
+                agg[f"{prefix}_{short}_flip_rate"] = (
+                    round(float(flipped.mean()), 3) if len(flipped) > 0 else None
+                )
 
     return agg
 
@@ -701,7 +823,11 @@ def print_summary(agg: dict) -> None:
                 t = agg.get(f"{prefix}_{dim}_tie", 0)
                 l = agg.get(f"{prefix}_{dim}_loss", 0)
                 wr = agg.get(f"{prefix}_{dim}_win_rate", 0)
-                lines.append(f"    {dim}: W={w} / T={t} / L={l}  (win_rate={wr:.1%})")
+                line = f"    {dim}: W={w} / T={t} / L={l}  (win_rate={wr:.1%})"
+                flip = agg.get(f"{prefix}_{dim}_flip_rate")
+                if flip is not None:
+                    line += f"  flip_rate={flip:.1%}"
+                lines.append(line)
 
     # Combined + agreement
     lines.append("\n  --- Combined ---")

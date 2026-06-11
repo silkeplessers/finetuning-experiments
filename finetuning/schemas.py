@@ -30,11 +30,11 @@ class QualityScoreBatch(BaseModel):
 class DutchQualityResult(BaseModel):
     """Structured response from the Dutch quality judge."""
 
-    grammar_score: int = Field(ge=1, le=10)
+    grammar_score: int = Field(ge=0, le=5)
     grammar_justification: str
-    fluency_score: int = Field(ge=1, le=10)
+    fluency_score: int = Field(ge=0, le=5)
     fluency_justification: str
-    vocabulary_score: int = Field(ge=1, le=10)
+    vocabulary_score: int = Field(ge=0, le=5)
     vocabulary_justification: str
     language_mixing: bool
     language_mixing_examples: str
@@ -43,9 +43,14 @@ class DutchQualityResult(BaseModel):
 class InstructionFollowingResult(BaseModel):
     """Structured response from the instruction-following judge."""
 
-    instruction_following_score: int = Field(ge=1, le=10)
+    instruction_following_score: int = Field(ge=0, le=5)
     instruction_following_justification: str
-    correctness_score: int = Field(ge=1, le=10)
+
+
+class CorrectnessResult(BaseModel):
+    """Structured response from the correctness judge."""
+
+    correctness_score: int = Field(ge=0, le=5)
     correctness_justification: str
 
 
