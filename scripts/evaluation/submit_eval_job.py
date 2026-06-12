@@ -19,7 +19,7 @@ import json
 import os
 from pathlib import Path
 
-from azure.ai.ml import Input, MLClient, Output, command
+from azure.ai.ml import MLClient, Output, command
 from azure.ai.ml.entities import Environment
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
@@ -112,6 +112,23 @@ def main() -> None:
         conda_file=str(conda_file),
     )
 
+    required_job_env_vars = ["ENDPOINT", "JUDGE_LLM_1", "JUDGE_LLM_2"]
+    environment_variables = {}
+    missing = []
+    for key in required_job_env_vars:
+        value = os.getenv(key)
+        if value:
+            environment_variables[key] = value
+        else:
+            missing.append(key)
+
+    if missing:
+        missing_list = ", ".join(missing)
+        raise RuntimeError(
+            f"Missing required env var(s): {missing_list}. "
+            "Set them in your shell or .env before submitting."
+        )
+
     # Build command with CLI arguments
     # Note: entire repo_root is code_dir, so we use relative paths
     command_args = (
@@ -153,6 +170,7 @@ def main() -> None:
         description=azure_cfg.get("description", "Evaluation job"),
         instance_count=int(azure_cfg.get("instance_count", 1)),
         timeout=int(azure_cfg.get("timeout_minutes", 480)) * 60,
+        environment_variables=environment_variables,
     )
 
     ml_client = build_ml_client(azure_cfg)
