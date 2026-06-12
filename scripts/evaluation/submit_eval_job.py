@@ -84,7 +84,6 @@ def main() -> None:
     args = parser.parse_args()
 
     config_path = Path(args.config).resolve()
-    qlora_config_path = Path(args.qlora_config).resolve()
     repo_root = (
         config_path.parent.parent.resolve()
         if config_path.parent.name == "azureml"
@@ -103,7 +102,7 @@ def main() -> None:
     baseline_suffix = "-with-baseline" if baseline_flag else "-cached-baseline"
     display_name = f"eval-{args.model_label}{baseline_suffix}"
 
-    code_dir = (repo_root / "scripts" / "evaluation").resolve()
+    code_dir = repo_root.resolve()
     conda_file = (repo_root / "azureml" / "conda_eval.yml").resolve()
 
     environment = Environment(
@@ -114,11 +113,12 @@ def main() -> None:
     )
 
     # Build command with CLI arguments
+    # Note: entire repo_root is code_dir, so we use relative paths
     command_args = (
-        "python job_eval.py "
+        "python scripts/evaluation/job_eval.py "
         "--model-label ${{inputs.model_label}} "
         "--baseline-eval ${{inputs.baseline_eval}} "
-        "--qlora-config ${{inputs.qlora_config}}"
+        "--qlora-config configs/qlora_config.json"
     )
 
     # Add optional test-size if provided
@@ -135,7 +135,6 @@ def main() -> None:
         inputs={
             "model_label": args.model_label,
             "baseline_eval": str(args.baseline_eval),
-            "qlora_config": Input(type="uri_file", path=str(qlora_config_path)),
         },
         outputs={
             "eval_output": Output(

@@ -30,6 +30,10 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 load_dotenv(_PROJECT_ROOT / ".env")
 
+# For Azure ML jobs running from project root, add current dir to path too
+if Path.cwd() != _PROJECT_ROOT:
+    sys.path.insert(0, str(Path.cwd()))
+
 from finetuning.config import load_config
 from finetuning.eval_visualization import generate_charts
 from finetuning.evaluation import (
@@ -76,7 +80,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--qlora-config",
         type=str,
-        required=True,
+        default="configs/qlora_config.json",
         help="Path to qlora_config.json (for judge endpoints and settings)",
     )
     parser.add_argument(
