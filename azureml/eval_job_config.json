@@ -4,8 +4,8 @@
     "resource_group": null,
     "workspace_name": null,
     "environment_name": "qlora-eval-env",
-    "environment_version": "1",
-    "compute": "gpu-cluster",
+    "environment_version": "2",
+    "compute": "cpu-cluster",
     "managed_identity_client_id": "62518eb4-a559-4f9c-9a85-7fb9793e5859",
     "experiment_name": "dutch-mistral",
     "display_name": "eval-baseline-vs-finetuned",
@@ -22,7 +22,7 @@
     "eval_prefix": "eval-results"
   },
   "evaluation": {
-    "max_workers": 4,
+    "max_workers": 128,
     "skip_mlflow": false,
     "dry_run": null,
     "baseline_eval": false

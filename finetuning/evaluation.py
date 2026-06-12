@@ -23,7 +23,15 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
+from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 from sklearn.metrics import cohen_kappa_score
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
 from finetuning.blob_storage import (
     download_blob_directory,
@@ -79,8 +87,21 @@ def build_judge_client(azure_endpoint: str):
 # ── Structured judge calls ───────────────────────────────────────────────────
 
 
+@retry(
+    retry=retry_if_exception_type(
+        (RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
+    ),
+    wait=wait_random_exponential(multiplier=2, min=2, max=60),
+    stop=stop_after_attempt(8),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
 async def _judge_call(client, model: str, system: str, user_msg: str, response_format):
-    """Single async judge API call with structured output. Returns a Pydantic model instance."""
+    """Single async judge API call with structured output. Returns a Pydantic model instance.
+
+    Retries on rate limits and transient errors with exponential backoff (2s -> 60s,
+    up to 8 attempts ~ several minutes of waiting before giving up).
+    """
     completion = await client.beta.chat.completions.parse(
         model=model,
         messages=[
