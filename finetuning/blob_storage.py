@@ -122,8 +122,18 @@ def download_blob_file(
     blob_client = client.get_blob_client(container=container_name, blob=blob_name)
     try:
         data = blob_client.download_blob().readall()
-    except Exception:
-        return False
+    except Exception as exc:
+        from azure.core.exceptions import ResourceNotFoundError
+        if isinstance(exc, ResourceNotFoundError):
+            return False
+        logger.error(
+            "Failed to download %s/%s: %s: %s",
+            container_name,
+            blob_name,
+            type(exc).__name__,
+            exc,
+        )
+        raise
     dest = Path(local_path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "wb") as f:

@@ -129,6 +129,12 @@ def main() -> None:
             "Set them in your shell or .env before submitting."
         )
 
+    # Inject managed identity client ID so DefaultAzureCredential picks it up
+    # inside the job for blob storage access.
+    managed_identity_client_id = azure_cfg.get("managed_identity_client_id")
+    if managed_identity_client_id:
+        environment_variables["AZURE_CLIENT_ID"] = managed_identity_client_id
+
     # Build command with CLI arguments
     # Note: entire repo_root is code_dir, so we use relative paths
     command_args = (
