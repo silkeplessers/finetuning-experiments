@@ -4,7 +4,7 @@
     "resource_group": null,
     "workspace_name": null,
     "environment_name": "qlora-eval-env",
-    "environment_version": "3",
+    "environment_version": "7",
     "compute": "cpu-cluster",
     "managed_identity_client_id": "62518eb4-a559-4f9c-9a85-7fb9793e5859",
     "experiment_name": "dutch-mistral",

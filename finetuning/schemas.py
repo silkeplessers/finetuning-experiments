@@ -34,7 +34,7 @@ class DutchQualityResult(BaseModel):
     grammar_justification: str
     fluency_score: int = Field(ge=0, le=5)
     fluency_justification: str
-    vocabulary_score: int = Field(ge=0, le=5)
+    vocabulary_score: int = Field(ge=0, le=2)
     vocabulary_justification: str
     language_mixing: bool
     language_mixing_examples: str
@@ -43,7 +43,7 @@ class DutchQualityResult(BaseModel):
 class InstructionFollowingResult(BaseModel):
     """Structured response from the instruction-following judge."""
 
-    instruction_following_score: int = Field(ge=0, le=5)
+    instruction_following_score: int = Field(ge=0, le=3)
     instruction_following_justification: str
 
 

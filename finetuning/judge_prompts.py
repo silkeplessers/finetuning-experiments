@@ -10,7 +10,7 @@ original prompt (in Dutch) and the model's actual response.
 Evaluate the response on FOUR sub-dimensions:
   1. Grammar      — integer 0-5
   2. Fluency      — integer 0-5
-  3. Vocabulary   — integer 0-5
+  3. Vocabulary   — integer 0-2
   4. Language mixing — boolean
 
 You MUST follow the scoring procedure below exactly, in order, every time. \
@@ -101,29 +101,51 @@ much.
 journalist or professional. No stiff phrasing anywhere. Reserve 5 for \
 genuinely polished text — when in doubt, score 4.
 
-# ---------------- 3. Vocabulary (0-5) ----------------
+# ---------------- 3. Vocabulary (0-2) ----------------
 What counts: appropriateness, precision, and idiomaticity of individual \
 word choices, given correct grammar and acceptable fluency.
 
-0 = Not Dutch, OR words are mostly invented / wrong / from another language \
-where Dutch equivalents are standard.
-    Example: "deleten", "submitten", "basicly", "anyway" used throughout.
-1 = Many wrong or non-idiomatic word choices (5+ in a short paragraph): \
-relies on English-shaped vocabulary or wrong senses of Dutch words.
-    Example: "realiseren" used to mean "beseffen", "controleren" used to \
-mean "beheersen", repeated.
-2 = Several non-idiomatic choices (3-4 in a short paragraph): the response \
-reaches for the wrong word often enough to be noticeable.
-    Example: "een taak performen" instead of "een taak uitvoeren"; \
-"locatie" where "plek" or "plaats" is clearly more natural.
-3 = Mostly fine but generic or imprecise: 1-2 suboptimal word choices, or \
-consistent reliance on vague verbs like "doen", "maken", "hebben" where a \
-more precise Dutch verb exists.
-4 = Appropriate and varied vocabulary; at most one word choice you would \
-have made differently. No wrong words.
-5 = Rich, precise, idiomatic vocabulary throughout. Word choices are the \
-ones a careful native writer would pick. Reserve 5 for genuinely \
-well-chosen vocabulary — when in doubt, score 4.
+Counting rule: count distinct vocabulary errors. A "vocabulary error" is a \
+word choice that a careful native Dutch speaker would call WRONG, CALQUED, \
+or IMPRECISE — not merely less elegant or less rich. Repeated use of the \
+same wrong word counts ONCE.
+
+What IS a vocabulary error:
+  - Wrong sense of a Dutch word (e.g. "realiseren" used to mean "beseffen", \
+"controleren" used to mean "beheersen").
+  - English calque where a standard Dutch word exists (e.g. "een taak \
+performen", "deleten", "submitten", "basicly").
+  - Clearly imprecise word in context (e.g. "locatie" where "plek" is \
+obviously the natural choice; "doen"/"maken"/"hebben" where a precise verb \
+is expected and standard).
+
+What is NOT a vocabulary error:
+  - A word you would have chosen differently but which is correct and \
+idiomatic.
+  - Slight register mismatch that does not change meaning.
+  - Established loanwords ("computer", "team", "checken", "updaten", \
+"mailen", "downloaden").
+  - Anything that is really a grammar or fluency issue — charge it there \
+and do NOT count it here.
+
+# Score anchors
+0 = Not Dutch, OR 3+ distinct vocabulary errors in a short paragraph. The \
+wrong word choices are immediately noticeable to a native reader.
+    Example: "deleten", "submitten", "basicly", "anyway" used throughout. \
+OR "realiseren"="beseffen", "een taak performen", "locatie" instead of \
+"plek" all in one short paragraph.
+1 = 1-2 distinct vocabulary errors. The response is generally acceptable \
+but the wrong word stands out at least once.
+    Example: response otherwise reads fine but uses "een taak performen" \
+once, OR "controleren" in the English sense once.
+2 = 0 vocabulary errors. Every word choice is correct and idiomatic. A \
+native reader would not flag any word.
+    Example: standard Dutch verbs and nouns used throughout; no calques, \
+no wrong senses, no obviously imprecise choices.
+
+Do NOT reward "rich" or "polished" vocabulary with a bonus — score 2 means \
+correct, not exceptional. Tie-break (Step 4) still applies: when in doubt \
+between two anchors, choose the LOWER score.
 
 # ---------------- 4. Language mixing (boolean) ----------------
 Set language_mixing = true if the response inserts non-Dutch words or \
@@ -150,13 +172,14 @@ In language_mixing_examples, list ONLY the words/phrases you flagged, \
 comma-separated. If nothing was flagged, return "".
 
 # Output
-Reply with ONLY a JSON object (no markdown fences, no commentary, no \
-trailing text):
+Reply with ONLY a JSON object. Start your response with { and end it with }. \
+Do not add any prefix such as "Assistant:", any markdown fences, any \
+commentary, or any trailing text:
 {"grammar_score": <int 0-5>, "grammar_justification": "<one sentence \
 naming the concrete issues counted>", \
 "fluency_score": <int 0-5>, "fluency_justification": "<one sentence \
 naming the concrete issues counted>", \
-"vocabulary_score": <int 0-5>, "vocabulary_justification": "<one sentence \
+"vocabulary_score": <int 0-2>, "vocabulary_justification": "<one sentence \
 naming the concrete issues counted>", \
 "language_mixing": <true|false>, \
 "language_mixing_examples": "<comma-separated flagged words, or empty string>"}"""
@@ -169,7 +192,7 @@ original prompt (in Dutch) and the model's actual response.
 
 # Task
 Evaluate the response on ONE dimension only:
-  Instruction Following — integer 0-5
+  Instruction Following — integer 0-3
 
 You are NOT evaluating language quality, factual correctness, or anything \
 else. Other judges handle those. Your only job is: did the response do what \
@@ -212,35 +235,41 @@ every requirement scores the same as a long one with identical coverage. \
 Penalise brevity ONLY when it causes a required element to be missing; \
 never reward verbosity, filler, or unrequested elaboration.
 
-# ---------------- Score anchors (0-5) ----------------
-0 = Refusal, empty, or completely off-topic. The response does not attempt \
-the task.
+# ---------------- Score anchors (0-3) ----------------
+Counting rule: from your Step 1 checklist, count distinct material issues. \
+Each missing required element = 1 issue. Each violated explicit constraint \
+(format, count, persona, output language, explicit "do/do not") = 1 issue. \
+Optional preferences, implicit style hints, and unrequested elaboration do \
+NOT count.
+
+0 = Refusal, empty, completely off-topic, OR wrong task. The response does \
+not attempt what was asked, or answers a different question entirely.
     Example: prompt asks for a poem about autumn; response says "Ik kan \
-hier niet mee helpen" or writes about cars.
-1 = Wrong task. The response stays on the broad topic but answers a \
-different question or ignores the core instruction.
-    Example: prompt asks "Geef drie argumenten voor X"; response gives one \
-general paragraph about X with no enumerated arguments.
-2 = Major elements missing. The response addresses the right task but \
-misses multiple required elements or violates multiple explicit constraints.
-    Example: asked for 5 examples with explanations; gives 2 examples \
-without explanations. OR asked for a JSON list; returns prose.
-3 = Core task addressed with notable gaps. Either one required element is \
-missing, OR one explicit constraint is violated, OR the response is clearly \
-too thin for what was asked.
+hier niet mee helpen". OR prompt asks "Geef drie argumenten voor X"; \
+response gives a general paragraph about X with no arguments.
+1 = 2+ material issues. The response addresses the right task but misses \
+multiple required elements or violates multiple explicit constraints.
+    Example: asked for 5 examples with explanations in JSON; gives 2 \
+examples without explanations in prose (missing count + missing explanations \
++ wrong format = 3 issues).
+2 = 1 material issue. Exactly one required element is missing OR one \
+explicit constraint is violated; everything else is satisfied.
     Example: asked for a summary AND a recommendation; gives only the \
 summary. OR asked to answer "in maximaal 50 woorden" and uses 90.
-4 = Follows the instruction well. All explicit requirements are met; any \
-gaps are minor (slightly less depth than implied, a stylistic preference \
-not honored, format almost-but-not-quite as requested).
-5 = Fully covers every explicit requirement, including format, count, \
-constraints, and persona, with appropriate depth. Reserve 5 when you can \
-tick every box from Step 1 — when in doubt, score 4.
+3 = 0 material issues. Every explicit requirement on the checklist is met: \
+topic, format, count, persona, output language, all "do/do not" instructions.
+    Example: asked for 3 arguments as a bulleted list in Dutch from a \
+teacher's perspective; response gives exactly 3 bullets in Dutch in a \
+teacher's voice.
+
+Tie-break (Step 4) still applies: when in doubt between two anchors, \
+choose the LOWER score.
 
 # Output
-Reply with ONLY a JSON object (no markdown fences, no commentary, no \
-trailing text):
-{"instruction_following_score": <int 0-5>, \
+Reply with ONLY a JSON object. Start your response with { and end it with }. \
+Do not add any prefix such as "Assistant:", any markdown fences, any \
+commentary, or any trailing text:
+{"instruction_following_score": <int 0-3>, \
 "instruction_following_justification": "<one sentence naming the concrete \
 requirements met or missed>"}"""
 
@@ -326,8 +355,9 @@ and plausible throughout. Reserve 5 when you can verify or accept every \
 claim — when in doubt, score 4.
 
 # Output
-Reply with ONLY a JSON object (no markdown fences, no commentary, no \
-trailing text):
+Reply with ONLY a JSON object. Start your response with { and end it with }. \
+Do not add any prefix such as "Assistant:", any markdown fences, any \
+commentary, or any trailing text:
 {"correctness_score": <int 0-5>, \
 "correctness_justification": "<one sentence naming the concrete errors \
 counted, or stating that none were found>"}"""

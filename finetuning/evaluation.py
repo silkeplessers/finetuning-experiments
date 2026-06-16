@@ -19,6 +19,7 @@ Design:
 import asyncio
 import json
 import logging
+import re
 import tempfile
 from pathlib import Path
 
@@ -102,15 +103,23 @@ async def _judge_call(client, model: str, system: str, user_msg: str, response_f
     Retries on rate limits and transient errors with exponential backoff (2s -> 60s,
     up to 8 attempts ~ several minutes of waiting before giving up).
     """
-    completion = await client.beta.chat.completions.parse(
+    completion = await client.chat.completions.create(
         model=model,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user_msg},
         ],
-        response_format=response_format,
+        response_format={"type": "json_object"},
     )
-    return completion.choices[0].message.parsed
+
+    content = completion.choices[0].message.content or ""
+    start = content.find("{")
+    end = content.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError(f"Judge response did not contain JSON: {content!r}")
+
+    json_text = content[start : end + 1]
+    return response_format.model_validate_json(json_text)
 
 
 async def evaluate_dutch_quality(
