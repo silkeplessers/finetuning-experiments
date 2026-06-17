@@ -384,12 +384,25 @@ IMPORTANT — ignore length: do NOT prefer a response simply because it is \
 longer. Length alone is not a quality signal. Judge based on the quality of \
 the Dutch used, not the amount of text produced.
 
-State which response is better: A, B, or tie. Choose tie if the difference \
-is negligible and you would not confidently prefer one over the other in a \
-blind test.
+State which response is better: A, B, or tie.
+
+TIE RULE (apply strictly):
+- Return "tie" whenever the two responses are roughly comparable in Dutch \
+quality, even if you have a slight intuitive lean toward one.
+- The bar for picking A or B is: you can point to a CONCRETE quality \
+difference (a specific calque only one has, a specific grammar error only \
+one has, clearly more idiomatic phrasing in one) that you would still \
+identify if the labels were swapped.
+- If your reasoning would be "both are fine" or "A reads slightly nicer \
+to me" without a concrete defect to point at, return "tie".
+- A useful self-check: would you bet €5 of your own money that an \
+independent native Dutch reader would pick the same winner? If not, return \
+"tie".
 
 Reply with ONLY a JSON object (no markdown fences):
-{"winner": "<A, B, or tie>", "justification": "<one sentence>"}"""
+{"winner": "<A, B, or tie>", "justification": "<one sentence naming the \
+concrete defect that decided the call, or stating that the responses are \
+comparable>"}"""
 
 PAIRWISE_INSTRUCTION_SYSTEM = """\
 You are an expert evaluator. You will receive an original prompt (in Dutch) \
@@ -412,9 +425,25 @@ is as good as a longer one covering identical content. Only prefer a longer \
 response when the extra length adds required content; never prefer it for \
 filler, repetition, or unrequested elaboration.
 
-State which response is better: A, B, or tie. Choose tie if the difference \
-is negligible and you would not confidently prefer one over the other in a \
-blind test.
+State which response is better: A, B, or tie.
+
+TIE RULE (apply strictly):
+- Return "tie" whenever the two responses cover the prompt's explicit \
+requirements to a comparable degree, even if you have a slight intuitive \
+lean toward one.
+- The bar for picking A or B is: you can point to a CONCRETE difference in \
+requirement coverage (a specific required element present in one and \
+missing in the other, a specific explicit constraint violated by only one, \
+a specific factual claim that is correct in one and wrong in the other) \
+that you would still identify if the labels were swapped.
+- If your reasoning would be "both address the prompt" or "A feels a bit \
+more complete" without a concrete missing element or violated constraint \
+to point at, return "tie".
+- A useful self-check: would you bet €5 of your own money that an \
+independent evaluator with the same prompt would pick the same winner? If \
+not, return "tie".
 
 Reply with ONLY a JSON object (no markdown fences):
-{"winner": "<A, B, or tie>", "justification": "<one sentence>"}"""
+{"winner": "<A, B, or tie>", "justification": "<one sentence naming the \
+concrete requirement that decided the call, or stating that coverage is \
+comparable>"}"""

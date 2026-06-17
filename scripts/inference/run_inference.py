@@ -65,7 +65,12 @@ def parse_args() -> argparse.Namespace:
         "--max-new-tokens",
         type=int,
         default=512,
-        help="Max tokens to generate per example",
+        help=(
+            "Max tokens to generate per example. Default 512 covers the p99 "
+            "length of training outputs (~305 tokens) with headroom; raising "
+            "this above the training-length distribution triggers degenerate "
+            "repetition on creative-writing prompts."
+        ),
     )
     parser.add_argument(
         "--batch-size",

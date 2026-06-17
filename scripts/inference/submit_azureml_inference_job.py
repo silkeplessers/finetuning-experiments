@@ -66,8 +66,13 @@ def main() -> None:
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=1024,
-        help="Max tokens to generate per example",
+        default=512,
+        help=(
+            "Max tokens to generate per example. Default 512 covers the p99 "
+            "length of training outputs (~305 tokens) with headroom; raising "
+            "this above the training-length distribution triggers degenerate "
+            "repetition on creative-writing prompts."
+        ),
     )
     parser.add_argument(
         "--batch-size",

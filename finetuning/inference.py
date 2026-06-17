@@ -17,9 +17,22 @@ def run_inference(
     batch_size: int = 8,
     system_prompt: str | None = None,
     max_seq_length: int = 2048,
+    temperature: float = 0.3,
+    repetition_penalty: float = 1.15,
+    seed: int | None = 3407,
 ) -> list[str]:
-    """Run batched inference on a list of input texts and return generated answers."""
+    """Run batched inference on a list of input texts and return generated answers.
+
+    Uses sampling (temperature, top_p) plus a light repetition penalty to avoid
+    the greedy-decoding loops that fine-tuned Mistral-7B exhibits on Alpaca-style
+    SFT data. A fixed seed keeps runs reproducible.
+    """
     FastLanguageModel.for_inference(model)
+
+    if seed is not None:
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
