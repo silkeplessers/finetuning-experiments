@@ -44,7 +44,7 @@
       "seed": 3407,
       "fp16": true,
       "bf16": false,
-      "packing": true,
+      "packing": false,
       "disable_tqdm": true,
       "report_to": "wandb"
     }

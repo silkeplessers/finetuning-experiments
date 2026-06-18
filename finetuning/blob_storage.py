@@ -38,8 +38,22 @@ def download_blob_directory(
     if not blobs:
         raise FileNotFoundError(f"No blobs found under {container_name}/{blob_prefix}")
 
+    # Some blob accounts (HNS / legacy) list 0-byte "directory marker" blobs
+    # alongside the real files (e.g. ".../mistral_lora_run" next to
+    # ".../mistral_lora_run/README.md"). Writing those as files would clash with
+    # the directory we need to mkdir for the children. Detect and skip them.
+    all_names = {b.name for b in blobs}
+    dir_markers = {
+        name.rsplit("/", 1)[0]
+        for name in all_names
+        if "/" in name
+    }
+
     count = 0
     for blob in blobs:
+        if blob.name.endswith("/") or blob.name in dir_markers:
+            continue
+
         relative = blob.name[len(blob_prefix) :].lstrip("/")
         if not relative:
             continue
