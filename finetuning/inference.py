@@ -18,7 +18,10 @@ def run_inference(
     system_prompt: str | None = None,
     max_seq_length: int = 2048,
     temperature: float = 0.3,
-    repetition_penalty: float = 1.15,
+    top_p: float = 0.9,
+    top_k: int = 50,
+    repetition_penalty: float = 1.1,
+    no_repeat_ngram_size: int = 3,
     seed: int | None = 3407,
 ) -> list[str]:
     """Run batched inference on a list of input texts and return generated answers.
@@ -75,6 +78,12 @@ def run_inference(
             outputs = model.generate(
                 **tokens,
                 max_new_tokens=max_new_tokens,
+                do_sample=True,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                repetition_penalty=repetition_penalty,
+                no_repeat_ngram_size=no_repeat_ngram_size,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
                 use_cache=True,

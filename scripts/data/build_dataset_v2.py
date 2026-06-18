@@ -52,8 +52,14 @@ CLEAN_SOURCE = Path("datasets/alpaca_data_cleaned-dutch-clean.jsonl")
 ALPACA_6K = Path("datasets/alpaca_high_quality_6k.jsonl")
 
 SYNTHETIC_EXISTING = Path("datasets/synthetic_dutch.jsonl")
-SYNTHETIC_EXTRA = Path("datasets/synthetic_dutch_extra5500.jsonl")
+# All files in SYNTHETIC_EXTRA_FILES are concatenated onto SYNTHETIC_EXISTING.
+# Order matters only for tie-breaking when trimming to TARGET_SYNTHETIC_TOTAL.
+SYNTHETIC_EXTRA_FILES = [
+    Path("datasets/synthetic_dutch_extra5500.jsonl"),
+    Path("datasets/synthetic_dutch_extra3100.jsonl"),
+]
 SYNTHETIC_7500 = Path("datasets/synthetic_dutch_7500.jsonl")
+TARGET_SYNTHETIC_TOTAL = 7500
 
 TRAIN_OUT = Path("datasets/alpaca_train_v2.jsonl")
 TEST_OUT = Path("datasets/alpaca_test_v2.jsonl")
@@ -124,27 +130,46 @@ def write_alpaca_6k(df: pd.DataFrame) -> None:
 def combine_synthetic() -> pd.DataFrame:
     if not SYNTHETIC_EXISTING.exists():
         raise FileNotFoundError(SYNTHETIC_EXISTING)
-    if not SYNTHETIC_EXTRA.exists():
+    missing = [p for p in SYNTHETIC_EXTRA_FILES if not p.exists()]
+    if missing:
         raise FileNotFoundError(
-            f"{SYNTHETIC_EXTRA} not found. Generate it first with:\n"
-            f"  python scripts/data/generate_synthetic_data.py "
-            f"--num-examples 5500 --output {SYNTHETIC_EXTRA} --no-upload"
+            "Missing synthetic extra files: "
+            + ", ".join(str(p) for p in missing)
+            + ". Generate them first with scripts/data/generate_synthetic_data.py "
+            "(use --no-upload)."
         )
 
+    keep_cols = ["instruction", "input", "output"]
+
+    frames: list[pd.DataFrame] = []
     existing = pd.read_json(SYNTHETIC_EXISTING, lines=True)
-    extra = pd.read_json(SYNTHETIC_EXTRA, lines=True)
+    frames.append(existing[[c for c in keep_cols if c in existing.columns]])
+    sizes = {str(SYNTHETIC_EXISTING): len(existing)}
+    for path in SYNTHETIC_EXTRA_FILES:
+        df = pd.read_json(path, lines=True)
+        sizes[str(path)] = len(df)
+        frames.append(df[[c for c in keep_cols if c in df.columns]])
+
+    combined = pd.concat(frames, ignore_index=True)
     logger.info(
-        "Synthetic: existing=%d, extra=%d, combined=%d",
-        len(existing),
-        len(extra),
-        len(existing) + len(extra),
+        "Synthetic inputs: %s -> combined=%d",
+        ", ".join(f"{k}={v}" for k, v in sizes.items()),
+        len(combined),
     )
 
-    # Normalise schema: keep instruction/input/output/prompt; drop id (re-issue)
-    keep_cols = ["instruction", "input", "output"]
-    existing = existing[[c for c in keep_cols if c in existing.columns]]
-    extra = extra[[c for c in keep_cols if c in extra.columns]]
-    combined = pd.concat([existing, extra], ignore_index=True)
+    if len(combined) < TARGET_SYNTHETIC_TOTAL:
+        raise ValueError(
+            f"Only {len(combined)} synthetic rows available; need "
+            f"{TARGET_SYNTHETIC_TOTAL}. Generate more before continuing."
+        )
+    if len(combined) > TARGET_SYNTHETIC_TOTAL:
+        logger.info(
+            "Trimming combined synthetic from %d to %d rows",
+            len(combined),
+            TARGET_SYNTHETIC_TOTAL,
+        )
+        combined = combined.iloc[:TARGET_SYNTHETIC_TOTAL].reset_index(drop=True)
+
     combined.insert(0, "id", range(1, len(combined) + 1))
 
     SYNTHETIC_7500.parent.mkdir(parents=True, exist_ok=True)
