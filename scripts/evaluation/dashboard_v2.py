@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -21,7 +22,11 @@ import streamlit as st
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from finetuning.blob_storage import list_blob_prefixes, read_blob_json
+from finetuning.blob_storage import (
+    download_blob_file,
+    list_blob_prefixes,
+    read_blob_json,
+)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -42,6 +47,14 @@ SCORE_LABELS = {
     "vocabulary_score": "Vocabulary",
     "instruction_following_score": "Instr. Following",
     "correctness_score": "Correctness",
+}
+# Max value for each rubric (used to scale histogram x-axes).
+SCORE_MAX = {
+    "grammar_score": 5,
+    "fluency_score": 5,
+    "vocabulary_score": 2,
+    "instruction_following_score": 3,
+    "correctness_score": 5,
 }
 JUDGES = [("j1", "Judge 1"), ("j2", "Judge 2")]
 DIMENSIONS = [
@@ -76,6 +89,84 @@ def load_all_experiments() -> pd.DataFrame:
     )
     df = df.sort_values("_sort").drop(columns="_sort").reset_index(drop=True)
     return df
+
+
+@st.cache_data(ttl=120)
+def load_row_scores(model_label: str) -> pd.DataFrame:
+    """Fetch per-row judge scores for one experiment from blob storage.
+
+    Reads ``eval-results/{model_label}/row_scores.jsonl``. Returns an empty
+    DataFrame if the file is missing (e.g. older runs that didn't persist
+    row-level scores).
+    """
+    blob_name = f"{EVAL_BLOB_PREFIX}/{model_label}/row_scores.jsonl"
+    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as f:
+        tmp_path = f.name
+    try:
+        found = download_blob_file(
+            STORAGE_ACCOUNT, EVAL_CONTAINER, blob_name, tmp_path
+        )
+        if not found:
+            return pd.DataFrame()
+        return pd.read_json(tmp_path, lines=True)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+@st.cache_data(ttl=120)
+def load_scores_long(
+    model_labels: tuple[str, ...], judge_view: str
+) -> pd.DataFrame:
+    """Long-form per-row scores across selected experiments.
+
+    Columns: ``Experiment``, ``Dimension`` (rubric key), ``DimensionLabel``,
+    ``Score`` (float — may be a J1+J2 row-average when ``judge_view`` is
+    ``combined``), ``Judge`` (``J1`` / ``J2`` / ``Combined``).
+    Rows with NaN scores (e.g. content-filter skips) are dropped.
+    """
+    frames: list[pd.DataFrame] = []
+    for label in model_labels:
+        df_rows = load_row_scores(label)
+        if df_rows.empty:
+            continue
+        for col in SCORE_COLS:
+            j1_col = f"j1_{col}"
+            j2_col = f"j2_{col}"
+            if j1_col not in df_rows.columns or j2_col not in df_rows.columns:
+                continue
+            j1 = pd.to_numeric(df_rows[j1_col], errors="coerce")
+            j2 = pd.to_numeric(df_rows[j2_col], errors="coerce")
+            if judge_view == "combined":
+                vals = pd.concat([j1, j2], axis=1).mean(axis=1, skipna=True)
+                frames.append(
+                    pd.DataFrame(
+                        {
+                            "Experiment": label,
+                            "Dimension": col,
+                            "DimensionLabel": SCORE_LABELS[col],
+                            "Score": vals,
+                            "Judge": "Combined",
+                        }
+                    ).dropna(subset=["Score"])
+                )
+            else:
+                for jlabel, series in (("J1", j1), ("J2", j2)):
+                    frames.append(
+                        pd.DataFrame(
+                            {
+                                "Experiment": label,
+                                "Dimension": col,
+                                "DimensionLabel": SCORE_LABELS[col],
+                                "Score": series,
+                                "Judge": jlabel,
+                            }
+                        ).dropna(subset=["Score"])
+                    )
+    if not frames:
+        return pd.DataFrame(
+            columns=["Experiment", "Dimension", "DimensionLabel", "Score", "Judge"]
+        )
+    return pd.concat(frames, ignore_index=True)
 
 
 # ── Plot helpers ──────────────────────────────────────────────────────────────
@@ -241,6 +332,81 @@ def delta_diverging_bar(finetuned: pd.DataFrame, score_prefix: str, title: str) 
     return fig
 
 
+def distribution_histograms(long_df: pd.DataFrame, judge_view: str) -> go.Figure | None:
+    """Per-rubric normalised histograms, faceted by dimension, coloured by experiment.
+
+    For per-judge views (``J1`` / ``J2`` separately), the long-form frame can
+    carry both judges and we facet a second axis on Judge by stacking column
+    facets — but to keep the chart legible we render one figure per judge
+    upstream and only pass a single-Judge slice here.
+    """
+    if long_df.empty:
+        return None
+    # Round combined (J1+J2 mean) to nearest 0.5 so the histogram bins land on
+    # sensible ticks rather than producing 9 fractional buckets.
+    df = long_df.copy()
+    if judge_view == "combined":
+        df["Score"] = (df["Score"] * 2).round() / 2
+        nbins = None
+        xbins = dict(start=-0.25, end=df["Score"].max() + 0.5, size=0.5)
+    else:
+        df["Score"] = df["Score"].round().astype(int)
+        nbins = None
+        xbins = dict(start=-0.5, end=df["Score"].max() + 1.0, size=1)
+
+    fig = px.histogram(
+        df,
+        x="Score",
+        color="Experiment",
+        facet_col="DimensionLabel",
+        facet_col_wrap=3,
+        histnorm="probability",
+        barmode="overlay",
+        opacity=0.55,
+        category_orders={
+            "DimensionLabel": [SCORE_LABELS[c] for c in SCORE_COLS],
+        },
+    )
+    fig.update_traces(xbins=xbins)
+    fig.update_yaxes(matches=None, title="Probability", tickformat=".0%")
+    fig.update_xaxes(title="Score")
+    # Strip "DimensionLabel=" prefix from facet titles.
+    fig.for_each_annotation(lambda a: a.update(text=a.text.split("=", 1)[-1]))
+    fig.update_layout(
+        height=540,
+        margin=dict(l=10, r=10, t=50, b=40),
+        legend=dict(orientation="h", y=-0.15),
+        bargap=0.05,
+    )
+    return fig
+
+
+def distribution_violins(long_df: pd.DataFrame) -> go.Figure | None:
+    """Compact violin plots per (dimension, experiment) — better for >3 experiments."""
+    if long_df.empty:
+        return None
+    fig = px.violin(
+        long_df,
+        x="DimensionLabel",
+        y="Score",
+        color="Experiment",
+        box=True,
+        points=False,
+        category_orders={
+            "DimensionLabel": [SCORE_LABELS[c] for c in SCORE_COLS],
+        },
+    )
+    fig.update_layout(
+        height=460,
+        xaxis_title="",
+        yaxis_title="Score",
+        legend=dict(orientation="h", y=-0.2),
+        margin=dict(l=10, r=10, t=30, b=40),
+        violinmode="group",
+    )
+    return fig
+
+
 def flip_rate_bar(flip_df: pd.DataFrame) -> go.Figure:
     """Grouped bar: x = experiment, colour = judge, faceted by dimension."""
     fig = px.bar(
@@ -354,8 +520,9 @@ for i, (_, r) in enumerate(df_sel.iterrows()):
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_scores, tab_pairwise, tab_flip, tab_lang, tab_agree, tab_detail = st.tabs([
+tab_scores, tab_dist, tab_pairwise, tab_flip, tab_lang, tab_agree, tab_detail = st.tabs([
     "📊 Scores",
+    "📈 Distributions",
     "⚔️ Pairwise (W/T/L)",
     "🎯 Flip rate",
     "🌐 Language mixing",
@@ -418,7 +585,90 @@ with tab_scores:
         st.info("Δ vs baseline requires at least one finetuned experiment in the selection.")
 
 
-# ── Tab 2: Pairwise W/T/L ────────────────────────────────────────────────────
+# ── Tab 2: Distributions ─────────────────────────────────────────────────────
+
+with tab_dist:
+    st.subheader("Score distribution per rubric")
+    st.caption(
+        "Per-row judge scores pulled from `row_scores.jsonl` on blob — no eval "
+        "re-run needed. Histograms are normalised to probability so experiments "
+        "with different `n` stay comparable."
+    )
+
+    dist_plot_kind = st.radio(
+        "Plot type",
+        options=["Histogram (overlay)", "Violin"],
+        index=0,
+        horizontal=True,
+        key="dist_plot_kind",
+    )
+    dist_judge = st.radio(
+        "Judge",
+        options=["Combined (J1+J2 mean)", "Judge 1", "Judge 2", "Both side-by-side"],
+        index=0,
+        horizontal=True,
+        key="dist_judge",
+    )
+
+    selected_tuple = tuple(df_sel["model_label"].tolist())
+
+    if dist_judge == "Combined (J1+J2 mean)":
+        long_df = load_scores_long(selected_tuple, "combined")
+        judge_views = [("combined", None, long_df)]
+    elif dist_judge == "Judge 1":
+        full = load_scores_long(selected_tuple, "per_judge")
+        long_df = full[full["Judge"] == "J1"]
+        judge_views = [("per_judge", "Judge 1", long_df)]
+    elif dist_judge == "Judge 2":
+        full = load_scores_long(selected_tuple, "per_judge")
+        long_df = full[full["Judge"] == "J2"]
+        judge_views = [("per_judge", "Judge 2", long_df)]
+    else:  # side-by-side
+        full = load_scores_long(selected_tuple, "per_judge")
+        judge_views = [
+            ("per_judge", "Judge 1", full[full["Judge"] == "J1"]),
+            ("per_judge", "Judge 2", full[full["Judge"] == "J2"]),
+        ]
+
+    if all(view_df.empty for _, _, view_df in judge_views):
+        st.info(
+            "No per-row scores found on blob for the selected experiments. "
+            "Distributions require `row_scores.jsonl` — older runs without it "
+            "are not shown."
+        )
+    else:
+        for view_mode, view_title, view_df in judge_views:
+            if view_df.empty:
+                continue
+            if view_title:
+                st.markdown(f"#### {view_title}")
+            if dist_plot_kind == "Histogram (overlay)":
+                fig = distribution_histograms(view_df, view_mode)
+            else:
+                fig = distribution_violins(view_df)
+            if fig is not None:
+                st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("Show per-dimension descriptive stats"):
+            stat_frames = []
+            for _, _, view_df in judge_views:
+                if view_df.empty:
+                    continue
+                stats = (
+                    view_df.groupby(["Experiment", "DimensionLabel", "Judge"])["Score"]
+                    .agg(["count", "mean", "std", "median"])
+                    .round(3)
+                    .reset_index()
+                )
+                stat_frames.append(stats)
+            if stat_frames:
+                st.dataframe(
+                    pd.concat(stat_frames, ignore_index=True),
+                    use_container_width=True,
+                )
+
+
+# ── Tab 3: Pairwise W/T/L ────────────────────────────────────────────────────
 
 with tab_pairwise:
     st.subheader("Win / Tie / Loss vs baseline")
@@ -470,7 +720,7 @@ with tab_pairwise:
                 )
 
 
-# ── Tab 3: Flip rate ──────────────────────────────────────────────────────────
+# ── Tab 4: Flip rate ──────────────────────────────────────────────────────────
 
 with tab_flip:
     st.subheader("Position-bias flip rate")
@@ -549,7 +799,7 @@ with tab_flip:
             st.info("Flip rate not available — re-run pairwise eval with the swap protocol.")
 
 
-# ── Tab 4: Language mixing ────────────────────────────────────────────────────
+# ── Tab 5: Language mixing ────────────────────────────────────────────────────
 
 with tab_lang:
     st.subheader("Language mixing rate")
@@ -586,7 +836,7 @@ with tab_lang:
         st.plotly_chart(fig, use_container_width=True)
 
 
-# ── Tab 5: Inter-judge agreement ──────────────────────────────────────────────
+# ── Tab 6: Inter-judge agreement ──────────────────────────────────────────────
 
 with tab_agree:
     st.subheader("Inter-judge agreement")
@@ -653,7 +903,7 @@ with tab_agree:
             )
 
 
-# ── Tab 6: Experiment detail ──────────────────────────────────────────────────
+# ── Tab 7: Experiment detail ──────────────────────────────────────────────────
 
 with tab_detail:
     st.subheader("Experiment detail")
