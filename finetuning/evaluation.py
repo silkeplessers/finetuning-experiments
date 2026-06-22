@@ -24,7 +24,13 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
-from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    BadRequestError,
+    InternalServerError,
+    RateLimitError,
+)
 from sklearn.metrics import cohen_kappa_score
 from tenacity import (
     before_sleep_log,
@@ -88,6 +94,12 @@ def build_judge_client(azure_endpoint: str):
 # ── Structured judge calls ───────────────────────────────────────────────────
 
 
+def _is_reasoning_model(model: str) -> bool:
+    """GPT-5.x and o-series models accept `reasoning_effort` instead of `temperature`."""
+    m = model.lower()
+    return m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4")
+
+
 @retry(
     retry=retry_if_exception_type(
         (RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
@@ -102,7 +114,15 @@ async def _judge_call(client, model: str, system: str, user_msg: str, response_f
 
     Retries on rate limits and transient errors with exponential backoff (2s -> 60s,
     up to 8 attempts ~ several minutes of waiting before giving up).
+
+    For GPT-5.x / o-series reasoning models we pass `reasoning_effort="high"` to
+    reduce position-bias flips on pairwise judging. Other models (e.g. grok-4.3)
+    don't accept this parameter so we omit it.
     """
+    extra: dict = {}
+    if _is_reasoning_model(model):
+        extra["reasoning_effort"] = "high"
+
     completion = await client.chat.completions.create(
         model=model,
         messages=[
@@ -110,6 +130,7 @@ async def _judge_call(client, model: str, system: str, user_msg: str, response_f
             {"role": "user", "content": user_msg},
         ],
         response_format={"type": "json_object"},
+        **extra,
     )
 
     content = completion.choices[0].message.content or ""
@@ -414,12 +435,22 @@ async def run_absolute_evaluation(
     async def _eval(row_idx, row, judge_label, judge_model):
         nonlocal done
         async with sem:
-            result = await evaluate_row(
-                client,
-                judge_model,
-                row["input"],
-                row["predicted_output"],
-            )
+            try:
+                result = await evaluate_row(
+                    client,
+                    judge_model,
+                    row["input"],
+                    row["predicted_output"],
+                )
+            except (BadRequestError, ValueError) as exc:
+                # Most commonly: content-filter triggered on the prompt or response,
+                # or judge returned non-JSON. Skip this row for this judge instead of
+                # killing the entire eval job.
+                logger.warning(
+                    "[absolute] skipping row=%d judge=%s: %s",
+                    row_idx, judge_label, type(exc).__name__,
+                )
+                result = {}
         results[(row_idx, judge_label)] = result
         done += 1
         if done % 20 == 0 or done == n_tasks:
@@ -469,14 +500,23 @@ async def run_pairwise_evaluation(
     async def _eval(pair_idx, b_row, f_row, judge_label, judge_model):
         nonlocal done
         async with sem:
-            result = await evaluate_pairwise(
-                client,
-                judge_model,
-                b_row["input"],
-                b_row["predicted_output"],
-                f_row["predicted_output"],
-                seed=pair_idx,
-            )
+            try:
+                result = await evaluate_pairwise(
+                    client,
+                    judge_model,
+                    b_row["input"],
+                    b_row["predicted_output"],
+                    f_row["predicted_output"],
+                    seed=pair_idx,
+                )
+            except (BadRequestError, ValueError) as exc:
+                # Content-filter or malformed-JSON on this pair: skip it for this
+                # judge rather than aborting the whole gather.
+                logger.warning(
+                    "[pairwise] skipping pair=%d judge=%s: %s",
+                    pair_idx, judge_label, type(exc).__name__,
+                )
+                result = {}
         results[(pair_idx, judge_label)] = result
         done += 1
         if done % 20 == 0 or done == n_tasks:
