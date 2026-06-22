@@ -106,6 +106,17 @@ def load_all_experiments() -> pd.DataFrame:
         agg = read_blob_json(STORAGE_ACCOUNT, EVAL_CONTAINER, blob_name)
         if agg:
             records.append(agg)
+
+    # If a baseline row_scores.jsonl is on blob but its aggregate.json is not
+    # (common when finetuned runs are launched with --baseline-eval false),
+    # synthesise a minimal baseline aggregate so the dashboard can still use
+    # it as a fixed reference in the Scores / Distributions tabs.
+    has_baseline = any(r.get("model_label") == "baseline" for r in records)
+    if not has_baseline:
+        synthetic = _synthesise_baseline_aggregate()
+        if synthetic is not None:
+            records.append(synthetic)
+
     if not records:
         return pd.DataFrame()
     df = pd.DataFrame(records)
@@ -114,6 +125,39 @@ def load_all_experiments() -> pd.DataFrame:
     )
     df = df.sort_values("_sort").drop(columns="_sort").reset_index(drop=True)
     return df
+
+
+def _synthesise_baseline_aggregate() -> dict | None:
+    """Build a minimal baseline aggregate from cached row_scores.jsonl.
+
+    Only fills the per-judge means and combined means needed by the Scores
+    tab (mean-bar / heatmap). Pairwise / delta / agreement fields are left
+    unset since they're not meaningful for the baseline-vs-itself view.
+    """
+    df_rows = load_row_scores("baseline")
+    if df_rows.empty:
+        return None
+    rec: dict = {"model_label": "baseline", "n_samples": int(len(df_rows))}
+    for col in SCORE_COLS:
+        j1 = pd.to_numeric(df_rows.get(f"j1_{col}"), errors="coerce")
+        j2 = pd.to_numeric(df_rows.get(f"j2_{col}"), errors="coerce")
+        if j1 is not None and j1.notna().any():
+            rec[f"j1_mean_{col}"] = round(float(j1.mean()), 3)
+        if j2 is not None and j2.notna().any():
+            rec[f"j2_mean_{col}"] = round(float(j2.mean()), 3)
+        if rec.get(f"j1_mean_{col}") is not None and rec.get(f"j2_mean_{col}") is not None:
+            rec[f"combined_mean_{col}"] = round(
+                (rec[f"j1_mean_{col}"] + rec[f"j2_mean_{col}"]) / 2, 3
+            )
+    # Language mixing rate per judge (used by the Language tab).
+    for prefix in ("j1", "j2"):
+        col = f"{prefix}_language_mixing"
+        if col in df_rows.columns:
+            rate = df_rows[col].apply(
+                lambda x: x is True or str(x).lower() == "true"
+            ).mean()
+            rec[f"{prefix}_language_mixing_rate"] = round(float(rate), 3)
+    return rec
 
 
 @st.cache_data(ttl=120)
