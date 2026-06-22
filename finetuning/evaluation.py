@@ -739,8 +739,12 @@ def compute_aggregate(
     # Inter-judge agreement on pairwise winners
     if df_pairwise is not None:
         for dim in ["pairwise_quality_winner", "pairwise_instruction_winner"]:
-            j1_w = df_pairwise[f"j1_{dim}"].tolist()
-            j2_w = df_pairwise[f"j2_{dim}"].tolist()
+            # Drop pairs where either judge has a missing winner (e.g. content-
+            # filter-skipped rows produce NaN/None) — sklearn's kappa would
+            # otherwise crash trying to sort a mix of str and NoneType.
+            pair_df = df_pairwise[[f"j1_{dim}", f"j2_{dim}"]].dropna()
+            j1_w = pair_df[f"j1_{dim}"].tolist()
+            j2_w = pair_df[f"j2_{dim}"].tolist()
             short = dim.replace("_winner", "")
             agg[f"agreement_{short}"] = _agreement_rate(j1_w, j2_w)
             agg[f"kappa_{short}"] = _safe_kappa(j1_w, j2_w, weights=None)
