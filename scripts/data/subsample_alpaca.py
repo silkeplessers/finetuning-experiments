@@ -177,7 +177,9 @@ async def score_batch(
                 message = response.choices[0].message
 
                 if message.refusal:
-                    logger.warning("Batch %d: model refused: %s", batch_id, message.refusal)
+                    logger.warning(
+                        "Batch %d: model refused: %s", batch_id, message.refusal
+                    )
                     return [None] * len(batch)
 
                 parsed = message.parsed
@@ -194,12 +196,17 @@ async def score_batch(
 
             except Exception as e:
                 error_str = str(e)
-                is_rate_limit = "429" in error_str or "too_many_requests" in error_str.lower()
+                is_rate_limit = (
+                    "429" in error_str or "too_many_requests" in error_str.lower()
+                )
                 if is_rate_limit and attempt < MAX_RETRIES - 1:
-                    wait = BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 1)
+                    wait = BACKOFF_BASE * (2**attempt) + random.uniform(0, 1)
                     logger.warning(
                         "Batch %d: 429 rate limited (attempt %d/%d), retrying in %.1fs",
-                        batch_id, attempt + 1, MAX_RETRIES, wait,
+                        batch_id,
+                        attempt + 1,
+                        MAX_RETRIES,
+                        wait,
                     )
                     await asyncio.sleep(wait)
                     continue
@@ -212,7 +219,8 @@ async def llm_score_all(
     concurrency: int,
 ) -> list[tuple[float, dict]]:
     """Score all candidates with the LLM judge and return (combined_score, row) pairs."""
-    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+    from azure.identity import (DefaultAzureCredential,
+                                get_bearer_token_provider)
     from dotenv import load_dotenv
     from openai import AsyncOpenAI
 

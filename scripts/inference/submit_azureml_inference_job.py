@@ -46,9 +46,7 @@ def build_ml_client(azure_cfg: dict) -> MLClient:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Submit inference job to Azure ML"
-    )
+    parser = argparse.ArgumentParser(description="Submit inference job to Azure ML")
     parser.add_argument(
         "--config",
         default="configs/qlora_config.json",
@@ -68,13 +66,18 @@ def main() -> None:
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=2048,
-        help="Max tokens to generate per example",
+        default=512,
+        help=(
+            "Max tokens to generate per example. Default 512 covers the p99 "
+            "length of training outputs (~305 tokens) with headroom; raising "
+            "this above the training-length distribution triggers degenerate "
+            "repetition on creative-writing prompts."
+        ),
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=8,
+        default=16,
         help="Batch size for inference",
     )
     parser.add_argument(
@@ -104,8 +107,8 @@ def main() -> None:
 
     # The inference script needs the finetuning package, so code_dir is repo root.
     code_dir = repo_root.resolve()
-    conda_file = (repo_root / "azureml" / "conda_inference.yml").resolve()
 
+    conda_file = (repo_root / "azureml" / "conda_inference.yml").resolve()
     environment = Environment(
         name=azure_cfg.get("inference_environment_name", "qlora-inference-env"),
         version=azure_cfg.get("inference_environment_version", "1"),
@@ -113,11 +116,12 @@ def main() -> None:
         conda_file=str(conda_file),
     )
 
+    print(f"Using registered environment: {environment}")
     output_uri = azure_cfg.get(
         "inference_results_uri",
         "azureml://datastores/workspaceblobstore/paths/inference-results/",
     )
-    
+
     # Build the command string
     cmd_parts = [
         "python scripts/inference/run_inference.py",
@@ -142,13 +146,13 @@ def main() -> None:
             "test_data": Input(type="uri_file", path=str(test_data_path)),
         },
         outputs={
-            "model_output": Output(
-                type="uri_folder", mode="rw_mount", path=output_uri
-            ),
+            "model_output": Output(type="uri_folder", mode="rw_mount", path=output_uri),
         },
         environment=environment,
         compute=azure_cfg["compute"],
-        experiment_name=azure_cfg.get("experiment_name", "dutch-mistral-qlora"),
+        experiment_name=azure_cfg.get(
+            "experiment_name", "dutch-mistral-qlora-inference"
+        ),
         display_name=display_name,
         description=f"Inference job ({args.mode}) for {run_name}",
         instance_count=1,

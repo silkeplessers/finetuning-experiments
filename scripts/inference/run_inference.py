@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import gc
+import json
 import logging
 import os
 import sys
@@ -24,7 +25,6 @@ from pathlib import Path
 
 import pandas as pd
 import torch
-import json
 
 # Ensure project root is on sys.path so `finetuning` package is importable.
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 STORAGE_ACCOUNT = "llmaml5615532443"
-ADAPTER_CONTAINER = "finetuning-output"
+ADAPTER_CONTAINER = "azureml-blobstore-4c704101-7a51-4680-bcf8-f13966bf69b4"
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,14 +64,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=1000,
-        help="Max tokens to generate per example",
+        default=512,
+        help=(
+            "Max tokens to generate per example. Default 512 covers the p99 "
+            "length of training outputs (~305 tokens) with headroom; raising "
+            "this above the training-length distribution triggers degenerate "
+            "repetition on creative-writing prompts."
+        ),
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=8,
-        help="Batch size for inference (default: 8)",
+        default=16,
+        help="Batch size for inference (default: 16)",
     )
     parser.add_argument(
         "--max-samples",
@@ -106,6 +111,7 @@ def prepare_test_data(path: str) -> pd.DataFrame:
     df = merge_instruction_into_input(df)
     return df
 
+
 def save_results(results: pd.DataFrame, output_dir: str, label: str) -> None:
     """Save inference results to a JSONL file inside *output_dir*."""
     out_path = Path(output_dir)
@@ -115,8 +121,15 @@ def save_results(results: pd.DataFrame, output_dir: str, label: str) -> None:
     logger.info("Saved results to %s", jsonl_path)
 
 
+BASELINE_SYSTEM_PROMPT = (
+    "Je bent een behulpzame assistent. "
+    "Beantwoord de volgende vraag volledig in het Nederlands. "
+    "Wees beknopt en relevant."
+)
+
+
 def run_baseline(
-    config: dict,   
+    config: dict,
     test_df: pd.DataFrame,
     max_new_tokens: int,
     batch_size: int,
@@ -133,7 +146,13 @@ def run_baseline(
     )
 
     predictions = run_inference(
-        model, tokenizer, test_df["prompt"].tolist(), max_new_tokens, batch_size
+        model,
+        tokenizer,
+        test_df["prompt"].tolist(),
+        max_new_tokens,
+        batch_size=batch_size,
+        system_prompt=BASELINE_SYSTEM_PROMPT,
+        max_seq_length=model_cfg["max_seq_length"],
     )
 
     results = test_df[["prompt", "output"]].copy()
@@ -159,12 +178,27 @@ def run_finetuned(
     output_dir: str,
     storage_account: str,
     adapter_container: str,
+    managed_identity_client_id: str | None = None,
 ) -> None:
     """Download LoRA adapters from blob, load finetuned model, run inference, save results."""
     model_cfg = config["model"]
     run_name = config["wandb"]["run_name"]
     final_model_subdir = config["training"]["final_model_subdir"]
-    blob_prefix = f"{run_name}/{final_model_subdir}/"
+
+    # Extract the blob path prefix from the output_uri (e.g. "finetuning-output")
+    output_uri = config.get("azureml", {}).get(
+        "output_uri",
+        "azureml://datastores/workspaceblobstore/paths/finetuning-output/",
+    )
+    blob_path_prefix = ""
+    if "/paths/" in output_uri:
+        blob_path_prefix = output_uri.split("/paths/", 1)[1].strip("/")
+
+    blob_prefix = (
+        f"{blob_path_prefix}/{run_name}/{final_model_subdir}/"
+        if blob_path_prefix
+        else f"{run_name}/{final_model_subdir}/"
+    )
 
     logger.info(
         "Downloading LoRA adapters from %s/%s ...", adapter_container, blob_prefix
@@ -176,6 +210,7 @@ def run_finetuned(
             adapter_container,
             blob_prefix,
             tmp_dir,
+            managed_identity_client_id=managed_identity_client_id,
         )
 
         logger.info("Loading finetuned model from adapter: %s", adapter_local)
@@ -233,6 +268,9 @@ def main() -> None:
             output_dir,
             args.storage_account,
             args.adapter_container,
+            managed_identity_client_id=config.get("azureml", {}).get(
+                "managed_identity_client_id"
+            ),
         )
 
     logger.info("Done.")

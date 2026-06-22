@@ -1,15 +1,22 @@
 import logging
 from pathlib import Path
+from typing import Optional
 
-from azure.identity import DefaultAzureCredential
+from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
 from azure.storage.blob import BlobServiceClient
 
 logger = logging.getLogger(__name__)
 
 
-def get_blob_service_client(storage_account: str) -> BlobServiceClient:
+def get_blob_service_client(
+    storage_account: str,
+    managed_identity_client_id: Optional[str] = None,
+) -> BlobServiceClient:
     account_url = f"https://{storage_account}.blob.core.windows.net"
-    credential = DefaultAzureCredential()
+    if managed_identity_client_id:
+        credential = ManagedIdentityCredential(client_id=managed_identity_client_id)
+    else:
+        credential = DefaultAzureCredential()
     return BlobServiceClient(account_url, credential=credential)
 
 
@@ -18,9 +25,10 @@ def download_blob_directory(
     container_name: str,
     blob_prefix: str,
     local_dir: str,
+    managed_identity_client_id: Optional[str] = None,
 ) -> str:
     """Download all blobs under a prefix to a local directory."""
-    client = get_blob_service_client(storage_account)
+    client = get_blob_service_client(storage_account, managed_identity_client_id)
     container = client.get_container_client(container_name)
 
     local_path = Path(local_dir)
@@ -28,13 +36,25 @@ def download_blob_directory(
 
     blobs = list(container.list_blobs(name_starts_with=blob_prefix))
     if not blobs:
-        raise FileNotFoundError(
-            f"No blobs found under {container_name}/{blob_prefix}"
-        )
+        raise FileNotFoundError(f"No blobs found under {container_name}/{blob_prefix}")
+
+    # Some blob accounts (HNS / legacy) list 0-byte "directory marker" blobs
+    # alongside the real files (e.g. ".../mistral_lora_run" next to
+    # ".../mistral_lora_run/README.md"). Writing those as files would clash with
+    # the directory we need to mkdir for the children. Detect and skip them.
+    all_names = {b.name for b in blobs}
+    dir_markers = {
+        name.rsplit("/", 1)[0]
+        for name in all_names
+        if "/" in name
+    }
 
     count = 0
     for blob in blobs:
-        relative = blob.name[len(blob_prefix):].lstrip("/")
+        if blob.name.endswith("/") or blob.name in dir_markers:
+            continue
+
+        relative = blob.name[len(blob_prefix) :].lstrip("/")
         if not relative:
             continue
 
@@ -46,7 +66,13 @@ def download_blob_directory(
             f.write(blob_client.download_blob().readall())
         count += 1
 
-    logger.info("Downloaded %d files from %s/%s -> %s", count, container_name, blob_prefix, local_dir)
+    logger.info(
+        "Downloaded %d files from %s/%s -> %s",
+        count,
+        container_name,
+        blob_prefix,
+        local_dir,
+    )
     return str(local_path)
 
 
@@ -65,3 +91,99 @@ def upload_file_to_blob(
 
     logger.info("Uploaded %s -> %s/%s", local_path, container_name, blob_name)
     return blob_client.url
+
+
+def upload_directory_to_blob(
+    storage_account: str,
+    container_name: str,
+    blob_prefix: str,
+    local_dir: str,
+) -> int:
+    """Upload all files in a local directory to blob storage under a prefix.
+
+    Returns the number of files uploaded.
+    """
+    client = get_blob_service_client(storage_account)
+    local_path = Path(local_dir)
+    count = 0
+    for file in local_path.rglob("*"):
+        if not file.is_file():
+            continue
+        relative = file.relative_to(local_path).as_posix()
+        blob_name = f"{blob_prefix}/{relative}" if blob_prefix else relative
+        blob_client = client.get_blob_client(container=container_name, blob=blob_name)
+        with open(file, "rb") as f:
+            blob_client.upload_blob(f, overwrite=True)
+        count += 1
+    logger.info(
+        "Uploaded %d files from %s -> %s/%s",
+        count,
+        local_dir,
+        container_name,
+        blob_prefix,
+    )
+    return count
+
+
+def download_blob_file(
+    storage_account: str,
+    container_name: str,
+    blob_name: str,
+    local_path: str,
+) -> bool:
+    """Download a single blob to a local file. Returns True if found, False if not."""
+    client = get_blob_service_client(storage_account)
+    blob_client = client.get_blob_client(container=container_name, blob=blob_name)
+    try:
+        data = blob_client.download_blob().readall()
+    except Exception as exc:
+        from azure.core.exceptions import ResourceNotFoundError
+        if isinstance(exc, ResourceNotFoundError):
+            return False
+        logger.error(
+            "Failed to download %s/%s: %s: %s",
+            container_name,
+            blob_name,
+            type(exc).__name__,
+            exc,
+        )
+        raise
+    dest = Path(local_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "wb") as f:
+        f.write(data)
+    logger.info("Downloaded %s/%s -> %s", container_name, blob_name, local_path)
+    return True
+
+
+def list_blob_prefixes(
+    storage_account: str,
+    container_name: str,
+    blob_prefix: str,
+    suffix: str = "",
+) -> list[str]:
+    """List blob names under a prefix, optionally filtered by suffix."""
+    client = get_blob_service_client(storage_account)
+    container = client.get_container_client(container_name)
+    return [
+        blob.name
+        for blob in container.list_blobs(name_starts_with=blob_prefix)
+        if not suffix or blob.name.endswith(suffix)
+    ]
+
+
+def read_blob_json(
+    storage_account: str,
+    container_name: str,
+    blob_name: str,
+) -> dict | None:
+    """Read a JSON blob and return parsed dict, or None if not found."""
+    import json
+
+    client = get_blob_service_client(storage_account)
+    blob_client = client.get_blob_client(container=container_name, blob=blob_name)
+    try:
+        data = blob_client.download_blob().readall()
+        return json.loads(data)
+    except Exception:
+        return None

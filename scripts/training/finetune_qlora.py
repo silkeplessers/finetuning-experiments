@@ -36,6 +36,7 @@ def init_wandb(config: dict, peft_config) -> wandb.sdk.wandb_run.Run | None:
     }
 
     return wandb.init(
+        entity=wandb_cfg.get("entity"),
         project=wandb_cfg["project"],
         name=wandb_cfg["run_name"],
         config=wandb_run_config,
@@ -150,7 +151,7 @@ def main() -> None:
         processing_class=tokenizer,
         train_dataset=formatted_dataset,
         # dataset_text_field="text",
-        #max_seq_length=model_cfg["max_seq_length"],
+        # max_seq_length=model_cfg["max_seq_length"],
         # packing=sft_config.packing,
         args=sft_config,
     )

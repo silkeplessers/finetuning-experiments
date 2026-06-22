@@ -1,0 +1,19 @@
+name: qlora-eval-env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - python-dotenv
+      - pandas
+      - numpy
+      - matplotlib
+      - scikit-learn
+      - pydantic
+      - openai
+      - azure-identity
+      - azure-storage-blob
+      - tenacity
+      - mlflow
+      - azureml-mlflow

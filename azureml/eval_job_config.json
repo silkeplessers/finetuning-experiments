@@ -1,0 +1,30 @@
+{
+  "azureml": {
+    "subscription_id": null,
+    "resource_group": null,
+    "workspace_name": null,
+    "environment_name": "qlora-eval-env",
+    "environment_version": "7",
+    "compute": "cpu-cluster",
+    "managed_identity_client_id": "62518eb4-a559-4f9c-9a85-7fb9793e5859",
+    "experiment_name": "dutch-mistral",
+    "display_name": "eval-baseline-vs-finetuned",
+    "description": "Evaluation job comparing baseline vs finetuned models with dual judge scoring",
+    "instance_count": 1,
+    "timeout_minutes": 480,
+    "stream_logs": true,
+    "output_uri": "azureml://datastores/workspaceblobstore/paths/eval-results/"
+  },
+  "storage": {
+    "storage_account": "llmaml5615532443",
+    "container": "azureml-blobstore-4c704101-7a51-4680-bcf8-f13966bf69b4",
+    "inference_prefix": "inference-results",
+    "eval_prefix": "eval-results"
+  },
+  "evaluation": {
+    "max_workers": 32,
+    "skip_mlflow": false,
+    "dry_run": null,
+    "baseline_eval": false
+  }
+}

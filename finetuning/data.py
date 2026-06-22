@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import torch
+
 from datasets import Dataset
 
 logger = logging.getLogger(__name__)
@@ -21,10 +22,11 @@ def merge_instruction_into_input(
 ) -> pd.DataFrame:
     """Concatenate the instruction and input columns into a single input column."""
     df = df.copy()
-    df["prompt"] = (
-        df[instruction_col].fillna("").str.strip()
-        + "\ninput: "
-        + df[input_col].fillna("").str.strip()
+    instruction = df[instruction_col].fillna("").str.strip()
+    extra_input = df[input_col].fillna("").str.strip()
+    df["prompt"] = instruction.where(
+        extra_input == "",
+        instruction + "\ninput: " + extra_input,
     ).str.strip()
     return df
 
@@ -34,8 +36,10 @@ def split_train_test(
     train_frac: float = 0.8,
     random_state: int = 42,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    train = data.sample(frac=train_frac, random_state=random_state).reset_index(drop=True)
-    test = data.drop(train.index).reset_index(drop=True)
+    train = data.sample(frac=train_frac, random_state=random_state)
+    test = data.drop(train.index)
+    train = train.reset_index(drop=True)
+    test = test.reset_index(drop=True)
     return train, test
 
 
@@ -58,6 +62,7 @@ def _get_fasttext_model():
     global _fasttext_model
     if _fasttext_model is None:
         import fasttext
+
         _fasttext_model = fasttext.load_model(str(FASTTEXT_MODEL_PATH))
         logger.info("Loaded fastText LID model from %s", FASTTEXT_MODEL_PATH)
     return _fasttext_model
@@ -67,6 +72,7 @@ def _get_perplexity_model():
     global _ppl_model, _ppl_tokenizer
     if _ppl_model is None:
         from transformers import AutoModelForCausalLM, AutoTokenizer
+
         _ppl_tokenizer = AutoTokenizer.from_pretrained(DUTCH_GPT2_MODEL)
         _ppl_model = AutoModelForCausalLM.from_pretrained(DUTCH_GPT2_MODEL)
         if torch.cuda.is_available():
@@ -94,7 +100,9 @@ def dutch_confidence(text: str) -> float:
 def perplexity(text: str, max_length: int = 512) -> float:
     """Compute perplexity of text using the Dutch GPT-2 model. Lower = more fluent."""
     model, tokenizer = _get_perplexity_model()
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length)
+    inputs = tokenizer(
+        text, return_tensors="pt", truncation=True, max_length=max_length
+    )
     device = next(model.parameters()).device
     inputs = {k: v.to(device) for k, v in inputs.items()}
     with torch.no_grad():
@@ -102,7 +110,9 @@ def perplexity(text: str, max_length: int = 512) -> float:
     return math.exp(loss.item())
 
 
-def perplexity_batch(texts: list[str], batch_size: int = 16, max_length: int = 512) -> list[float]:
+def perplexity_batch(
+    texts: list[str], batch_size: int = 16, max_length: int = 512
+) -> list[float]:
     """Compute perplexity for a list of texts in batches on GPU. Much faster than one-by-one."""
     model, tokenizer = _get_perplexity_model()
     if tokenizer.pad_token is None:
@@ -110,15 +120,23 @@ def perplexity_batch(texts: list[str], batch_size: int = 16, max_length: int = 5
     device = next(model.parameters()).device
 
     n_batches = (len(texts) + batch_size - 1) // batch_size
-    logger.info("Computing perplexity for %d texts in %d batches (batch_size=%d) on %s",
-                len(texts), n_batches, batch_size, device)
+    logger.info(
+        "Computing perplexity for %d texts in %d batches (batch_size=%d) on %s",
+        len(texts),
+        n_batches,
+        batch_size,
+        device,
+    )
 
     all_ppls = []
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i : i + batch_size]
         encoded = tokenizer(
-            batch_texts, return_tensors="pt", truncation=True,
-            max_length=max_length, padding=True,
+            batch_texts,
+            return_tensors="pt",
+            truncation=True,
+            max_length=max_length,
+            padding=True,
         )
         input_ids = encoded["input_ids"].to(device)
         attention_mask = encoded["attention_mask"].to(device)
@@ -128,7 +146,9 @@ def perplexity_batch(texts: list[str], batch_size: int = 16, max_length: int = 5
         labels[attention_mask == 0] = -100
 
         with torch.no_grad():
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+            outputs = model(
+                input_ids=input_ids, attention_mask=attention_mask, labels=labels
+            )
             # outputs.loss is the mean over all non-ignored tokens in the batch.
             # We need per-example loss, so compute it manually.
             shift_logits = outputs.logits[:, :-1, :].contiguous()
@@ -143,13 +163,19 @@ def perplexity_batch(texts: list[str], batch_size: int = 16, max_length: int = 5
 
             # Mask out padding and compute per-example mean loss
             mask = (shift_labels != -100).float()
-            per_example_loss = (token_losses * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+            per_example_loss = (token_losses * mask).sum(dim=1) / mask.sum(dim=1).clamp(
+                min=1
+            )
 
         for loss_val in per_example_loss:
             all_ppls.append(math.exp(loss_val.item()))
 
         if (i // batch_size + 1) % 50 == 0 or i + batch_size >= len(texts):
-            logger.info("  perplexity progress: %d/%d texts", min(i + batch_size, len(texts)), len(texts))
+            logger.info(
+                "  perplexity progress: %d/%d texts",
+                min(i + batch_size, len(texts)),
+                len(texts),
+            )
 
     return all_ppls
 
@@ -235,9 +261,7 @@ def heuristic_quality_score(row: dict) -> dict:
     }
 
 
-def heuristic_quality_score_batch(
-    rows: list[dict], batch_size: int = 16
-) -> list[dict]:
+def heuristic_quality_score_batch(rows: list[dict], batch_size: int = 16) -> list[dict]:
     """Score rows in bulk. Batches perplexity on GPU; fastText runs on CPU per-row.
 
     Returns a list of score dicts (same format as heuristic_quality_score).
@@ -262,17 +286,19 @@ def heuristic_quality_score_batch(
 
         total = lang_score + ppl_score + length_score + completeness_score
 
-        results.append({
-            "total": round(total, 2),
-            "nl_confidence_output": round(nl_conf_outputs[i], 3),
-            "nl_confidence_instruction": round(nl_conf_instrs[i], 3),
-            "nl_confidence_avg": round(nl_conf_avg, 3),
-            "perplexity": round(ppls[i], 1),
-            "word_count": word_count,
-            "lang_score": lang_score,
-            "ppl_score": ppl_score,
-            "length_score": length_score,
-            "completeness_score": completeness_score,
-        })
+        results.append(
+            {
+                "total": round(total, 2),
+                "nl_confidence_output": round(nl_conf_outputs[i], 3),
+                "nl_confidence_instruction": round(nl_conf_instrs[i], 3),
+                "nl_confidence_avg": round(nl_conf_avg, 3),
+                "perplexity": round(ppls[i], 1),
+                "word_count": word_count,
+                "lang_score": lang_score,
+                "ppl_score": ppl_score,
+                "length_score": length_score,
+                "completeness_score": completeness_score,
+            }
+        )
 
     return results

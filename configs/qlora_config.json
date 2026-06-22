@@ -18,7 +18,7 @@
       "up_proj",
       "down_proj"
     ],
-    "lora_alpha": 16,
+    "lora_alpha": 32,
     "lora_dropout": 0,
     "bias": "none",
     "use_gradient_checkpointing": "unsloth",
@@ -27,24 +27,24 @@
     "loftq_config": null
   },
   "training": {
-    "output_dir": "outputs/mistral_lora_run1",
-    "final_model_subdir": "mistral_lora_run1",
+    "output_dir": "outputs/mistral_lora_run",
+    "final_model_subdir": "mistral_lora_run",
     "sft_config": {
       "dataset_text_field": "text",
       "per_device_train_batch_size": 2,
       "gradient_accumulation_steps": 8,
-      "warmup_steps": 300,
+      "warmup_steps": 5,
       "max_length": 2048,
-      "num_train_epochs": 1,
+      "num_train_epochs": 2,
       "learning_rate": 0.0002,
       "logging_steps": 1,
       "optim": "adamw_8bit",
       "weight_decay": 0.01,
-      "lr_scheduler_type": "linear",
+      "lr_scheduler_type": "cosine",
       "seed": 3407,
       "fp16": true,
       "bf16": false,
-      "packing": false,
+      "packing": true,
       "disable_tqdm": true,
       "report_to": "wandb"
     }
@@ -52,17 +52,20 @@
   "wandb": {
     "enabled": true,
     "project": "dutch-mistral",
-    "run_name": "mistral_r16_a16_e1_b16"
+    "run_name": "mistral_r32_a64_e2_b16_w30_pack_cos"
   },
   "azureml": {
     "experiment_name": "dutch-mistral-qlora",
     "compute": "gpu-cluster",
+    "managed_identity_client_id": "62518eb4-a559-4f9c-9a85-7fb9793e5859",
     "display_name": "qlora-finetune",
     "description": "QLoRA finetuning job",
     "output_uri": "azureml://datastores/workspaceblobstore/paths/finetuning-output/",
     "inference_results_uri": "azureml://datastores/workspaceblobstore/paths/inference-results/",
     "environment_name": "qlora-unsloth-env",
-    "environment_version": "2",
+    "environment_version": "3",
+    "inference_environment_name": "qlora-inference-env",
+    "inference_environment_version": "2",
     "instance_count": 1,
     "timeout_minutes": 1440,
     "stream_logs": true

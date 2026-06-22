@@ -19,9 +19,9 @@ import sys
 import time
 from pathlib import Path
 
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from dotenv import load_dotenv
+from openai import AsyncAzureOpenAI
 
 # Add project root to path so we can import finetuning helpers
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -240,9 +240,16 @@ async def generate_all(
         DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
     )
 
-    client = AsyncOpenAI(
-        base_url=ENDPOINT,
-        api_key=token_provider(),
+    # Strip the `/openai/v1/` suffix so AsyncAzureOpenAI gets the resource root.
+    # AsyncAzureOpenAI calls token_provider() per request, so tokens auto-refresh
+    # (the previous AsyncOpenAI(api_key=token_provider()) call captured a single
+    # token that expired during long runs).
+    azure_endpoint = ENDPOINT.split("/openai/")[0].rstrip("/")
+
+    client = AsyncAzureOpenAI(
+        azure_endpoint=azure_endpoint,
+        azure_ad_token_provider=token_provider,
+        api_version="2024-10-21",
     )
 
     num_batches = (num_examples + EXAMPLES_PER_CALL - 1) // EXAMPLES_PER_CALL
