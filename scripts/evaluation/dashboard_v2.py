@@ -67,6 +67,31 @@ WIN_COLOR = "#2ca02c"   # green
 TIE_COLOR = "#bcbcbc"   # grey
 LOSS_COLOR = "#d62728"  # red
 
+# Baseline gets a fixed neutral grey so it's instantly recognisable as the
+# reference across every chart. Finetuned experiments draw from a high-
+# contrast qualitative palette (Plotly's D3 set works well at low opacity).
+BASELINE_COLOR = "#7f7f7f"
+FINETUNED_PALETTE = [
+    "#1f77b4",  # blue
+    "#ff7f0e",  # orange
+    "#2ca02c",  # green
+    "#d62728",  # red
+    "#9467bd",  # purple
+    "#8c564b",  # brown
+    "#e377c2",  # pink
+    "#17becf",  # cyan
+    "#bcbd22",  # olive
+]
+
+
+def build_color_map(experiments: list[str]) -> dict[str, str]:
+    """Stable colour assignment per experiment, baseline pinned to grey."""
+    finetuned = [e for e in experiments if e != "baseline"]
+    cmap = {"baseline": BASELINE_COLOR}
+    for i, label in enumerate(finetuned):
+        cmap[label] = FINETUNED_PALETTE[i % len(FINETUNED_PALETTE)]
+    return cmap
+
 
 # ── Data loading (cached with TTL for auto-refresh) ──────────────────────────
 
@@ -240,11 +265,13 @@ def grouped_score_bars(df_sel: pd.DataFrame, score_prefix: str, title: str) -> g
     if not rows:
         return None
     long_df = pd.DataFrame(rows)
+    cmap = build_color_map(long_df["Experiment"].unique().tolist())
     fig = px.bar(
         long_df,
         x="Dimension",
         y="Score",
         color="Experiment",
+        color_discrete_map=cmap,
         barmode="group",
         title=title,
         text_auto=".2f",
@@ -333,50 +360,49 @@ def delta_diverging_bar(finetuned: pd.DataFrame, score_prefix: str, title: str) 
 
 
 def distribution_histograms(long_df: pd.DataFrame, judge_view: str) -> go.Figure | None:
-    """Per-rubric normalised histograms, faceted by dimension, coloured by experiment.
+    """Per-rubric grouped histograms, faceted by dimension, coloured by experiment.
 
-    For per-judge views (``J1`` / ``J2`` separately), the long-form frame can
-    carry both judges and we facet a second axis on Judge by stacking column
-    facets — but to keep the chart legible we render one figure per judge
-    upstream and only pass a single-Judge slice here.
+    Uses ``barmode="group"`` (side-by-side bars per integer level) instead of
+    overlay — overlapping translucent rectangles muddle the colours when more
+    than two experiments are compared. Baseline is pinned to grey.
     """
     if long_df.empty:
         return None
-    # Round combined (J1+J2 mean) to nearest 0.5 so the histogram bins land on
-    # sensible ticks rather than producing 9 fractional buckets.
     df = long_df.copy()
     if judge_view == "combined":
+        # Round the J1+J2 row-mean to nearest 0.5 so bars land on sensible
+        # ticks rather than 9 fractional buckets.
         df["Score"] = (df["Score"] * 2).round() / 2
-        nbins = None
         xbins = dict(start=-0.25, end=df["Score"].max() + 0.5, size=0.5)
     else:
         df["Score"] = df["Score"].round().astype(int)
-        nbins = None
         xbins = dict(start=-0.5, end=df["Score"].max() + 1.0, size=1)
 
+    cmap = build_color_map(df["Experiment"].unique().tolist())
     fig = px.histogram(
         df,
         x="Score",
         color="Experiment",
+        color_discrete_map=cmap,
         facet_col="DimensionLabel",
         facet_col_wrap=3,
         histnorm="probability",
-        barmode="overlay",
-        opacity=0.55,
+        barmode="group",
+        opacity=0.95,
         category_orders={
             "DimensionLabel": [SCORE_LABELS[c] for c in SCORE_COLS],
         },
     )
-    fig.update_traces(xbins=xbins)
+    fig.update_traces(xbins=xbins, marker_line_width=0)
     fig.update_yaxes(matches=None, title="Probability", tickformat=".0%")
     fig.update_xaxes(title="Score")
-    # Strip "DimensionLabel=" prefix from facet titles.
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=", 1)[-1]))
     fig.update_layout(
         height=540,
         margin=dict(l=10, r=10, t=50, b=40),
         legend=dict(orientation="h", y=-0.15),
-        bargap=0.05,
+        bargap=0.15,
+        bargroupgap=0.05,
     )
     return fig
 
@@ -385,11 +411,13 @@ def distribution_violins(long_df: pd.DataFrame) -> go.Figure | None:
     """Compact violin plots per (dimension, experiment) — better for >3 experiments."""
     if long_df.empty:
         return None
+    cmap = build_color_map(long_df["Experiment"].unique().tolist())
     fig = px.violin(
         long_df,
         x="DimensionLabel",
         y="Score",
         color="Experiment",
+        color_discrete_map=cmap,
         box=True,
         points=False,
         category_orders={
@@ -470,12 +498,31 @@ selected = st.sidebar.multiselect(
     experiments,
     default=experiments,
 )
+pin_baseline = st.sidebar.checkbox(
+    "Always show baseline as reference",
+    value=True,
+    help=(
+        "Keeps the baseline row in the Scores and Distributions charts even if "
+        "it's not in the selection above. It is drawn in grey so it's instantly "
+        "distinguishable from finetuned experiments."
+    ),
+)
 df_sel = df[df["model_label"].isin(selected)].copy()
 finetuned = df_sel[df_sel["model_label"] != "baseline"].copy()
 
 if df_sel.empty:
     st.info("Select at least one experiment.")
     st.stop()
+
+# df_ref = df_sel + baseline (if pinned and not already in selection). Used for
+# the headline Scores and Distributions charts so baseline acts as a fixed
+# reference. Other tabs (pairwise, flip, agreement) keep using df_sel directly.
+if pin_baseline and "baseline" in experiments and "baseline" not in selected:
+    df_ref = pd.concat(
+        [df[df["model_label"] == "baseline"], df_sel], ignore_index=True
+    )
+else:
+    df_ref = df_sel
 
 # Sidebar: judge focus + score view toggle
 st.sidebar.header("View options")
@@ -536,31 +583,31 @@ tab_scores, tab_dist, tab_pairwise, tab_flip, tab_lang, tab_agree, tab_detail = 
 with tab_scores:
     st.subheader("Mean scores per dimension")
     if score_view == "Combined (J1+J2 avg)":
-        fig = grouped_score_bars(df_sel, "combined_mean", "Combined mean (J1 + J2 averaged)")
+        fig = grouped_score_bars(df_ref, "combined_mean", "Combined mean (J1 + J2 averaged)")
         if fig is not None:
             st.plotly_chart(fig, use_container_width=True)
         # Heatmap below for quick scanning
-        h = score_heatmap(df_sel, "combined_mean", "Heatmap — combined mean (1=red, 5=green)")
+        h = score_heatmap(df_ref, "combined_mean", "Heatmap — combined mean (1=red, 5=green)")
         if h is not None:
             st.plotly_chart(h, use_container_width=True)
     elif score_view == "Per-judge bars":
         c1, c2 = st.columns(2)
         with c1:
-            f1 = grouped_score_bars(df_sel, "j1_mean", "Judge 1 — mean scores")
+            f1 = grouped_score_bars(df_ref, "j1_mean", "Judge 1 — mean scores")
             if f1 is not None:
                 st.plotly_chart(f1, use_container_width=True)
         with c2:
-            f2 = grouped_score_bars(df_sel, "j2_mean", "Judge 2 — mean scores")
+            f2 = grouped_score_bars(df_ref, "j2_mean", "Judge 2 — mean scores")
             if f2 is not None:
                 st.plotly_chart(f2, use_container_width=True)
     else:  # heatmap
         c1, c2 = st.columns(2)
         with c1:
-            h1 = score_heatmap(df_sel, "j1_mean", "Judge 1 — mean scores")
+            h1 = score_heatmap(df_ref, "j1_mean", "Judge 1 — mean scores")
             if h1 is not None:
                 st.plotly_chart(h1, use_container_width=True)
         with c2:
-            h2 = score_heatmap(df_sel, "j2_mean", "Judge 2 — mean scores")
+            h2 = score_heatmap(df_ref, "j2_mean", "Judge 2 — mean scores")
             if h2 is not None:
                 st.plotly_chart(h2, use_container_width=True)
 
@@ -610,7 +657,7 @@ with tab_dist:
         key="dist_judge",
     )
 
-    selected_tuple = tuple(df_sel["model_label"].tolist())
+    selected_tuple = tuple(df_ref["model_label"].tolist())
 
     if dist_judge == "Combined (J1+J2 mean)":
         long_df = load_scores_long(selected_tuple, "combined")
